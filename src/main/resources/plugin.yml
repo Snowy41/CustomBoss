@@ -1,0 +1,15 @@
+name: CustomBosses
+version: ${project.version}
+main: com.mcbzh.custombosses.CustomBossesPlugin
+api-version: 1.21
+authors: [Antigravity]
+description: Custom Bosses with BlockDisplay models and In-Game Editor.
+commands:
+  cb:
+    description: Main command for CustomBosses
+    usage: /cb <subcommand>
+    aliases: [custombosses, boss]
+permissions:
+  custombosses.admin:
+    description: Allows full access to CustomBosses commands
+    default: op
