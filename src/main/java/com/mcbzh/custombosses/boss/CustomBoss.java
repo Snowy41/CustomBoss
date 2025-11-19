@@ -4,117 +4,86 @@ import com.mcbzh.custombosses.model.ModelData;
 import com.mcbzh.custombosses.model.ModelInstance;
 import org.bukkit.Location;
 import org.bukkit.attribute.Attribute;
-import org.bukkit.entity.EntityType;
-import org.bukkit.entity.Interaction;
-import org.bukkit.entity.LivingEntity;
-import org.bukkit.entity.Zombie;
+import org.bukkit.entity.*;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
-import org.bukkit.util.Vector;
 
-public class CustomBoss implements Boss {
+import java.util.UUID;
 
-    private final LivingEntity core;
-    private final Interaction interaction;
-    private final ModelInstance model;
+public class CustomBoss {
+
+    private final UUID uuid;
     private final ModelData modelData;
+    private final ModelInstance modelInstance;
+    private final LivingEntity coreEntity;
+    private final Interaction hitbox;
 
     public CustomBoss(ModelData data, Location location) {
+        this.uuid = UUID.randomUUID();
         this.modelData = data;
 
-        // 1. Spawn Core (Invisible Zombie)
-        this.core = (LivingEntity) location.getWorld().spawnEntity(location, EntityType.ZOMBIE);
-        this.core.setInvisible(true);
-        this.core.setSilent(true);
-        this.core.setAI(true); // Enable AI for pathfinding
+        // Spawn core (invisible zombie for AI)
+        this.coreEntity = (LivingEntity) location.getWorld().spawnEntity(location, EntityType.ZOMBIE);
+        coreEntity.setInvisible(true);
+        coreEntity.setSilent(true);
+        coreEntity.setAI(true);
 
-        if (core instanceof Zombie zombie) {
+        if (coreEntity instanceof Zombie zombie) {
             zombie.setAdult();
-            zombie.setInvulnerable(true);
         }
 
-        // Set custom health if specified
-        if (core.getAttribute(Attribute.GENERIC_MAX_HEALTH) != null) {
-            core.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(100.0);
-            core.setHealth(100.0);
-        }
+        // Set health
+        coreEntity.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(100.0);
+        coreEntity.setHealth(100.0);
 
-        // Add slowness to make it less jittery
-        core.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, Integer.MAX_VALUE, 0, false, false));
+        // Add slowness to reduce jitter
+        coreEntity.addPotionEffect(new PotionEffect(
+                PotionEffectType.SLOWNESS, Integer.MAX_VALUE, 0, false, false
+        ));
 
-        // 2. Spawn Interaction (Hitbox)
-        this.interaction = (Interaction) location.getWorld().spawnEntity(location, EntityType.INTERACTION);
-        Vector size = data.getHitboxSize();
-        this.interaction.setInteractionWidth((float) size.getX());
-        this.interaction.setInteractionHeight((float) size.getY());
-        this.interaction.setResponsive(true);
+        // Spawn hitbox
+        this.hitbox = (Interaction) location.getWorld().spawnEntity(location, EntityType.INTERACTION);
+        hitbox.setInteractionWidth((float) data.getHitboxSize().getX());
+        hitbox.setInteractionHeight((float) data.getHitboxSize().getY());
+        hitbox.setResponsive(true);
 
-        // 3. Create Model
-        this.model = new ModelInstance(data, location);
-        this.model.spawn();
+        // Spawn visual model
+        this.modelInstance = new ModelInstance(data, location);
+        modelInstance.spawn();
     }
 
-    @Override
     public void tick() {
-        if (!isValid()) {
-            return;
-        }
+        if (!isValid()) return;
 
-        // Sync Interaction to Core
-        Location coreLoc = core.getLocation();
-        interaction.teleport(coreLoc);
+        Location coreLoc = coreEntity.getLocation();
 
-        // Update Model to follow core
-        model.tick();
+        // Sync hitbox to core
+        hitbox.teleport(coreLoc);
 
-        // Teleport model root to core location
-        for (var part : model.getParts().values()) {
-            // Parts are updated via ModelInstance.update() which uses rootLocation
-            // We need to update the root location
-        }
-
-        // Update model root location
-        Location newRoot = core.getLocation();
-        model.updateRootLocation(newRoot);
+        // Sync model to core
+        modelInstance.setRootLocation(coreLoc);
+        modelInstance.update();
     }
 
-    @Override
-    public void despawn() {
-        if (core != null && core.isValid()) {
-            core.remove();
-        }
-        if (interaction != null && interaction.isValid()) {
-            interaction.remove();
-        }
-        if (model != null) {
-            model.despawn();
-        }
-    }
-
-    @Override
-    public boolean isValid() {
-        return core != null && core.isValid() &&
-                interaction != null && interaction.isValid();
-    }
-
-    @Override
-    public LivingEntity getCore() {
-        return core;
-    }
-
-    public Interaction getInteraction() {
-        return interaction;
-    }
-
-    @Override
     public void damage(double amount) {
-        if (core != null && core.isValid()) {
-            core.damage(amount);
-            model.hurt();
+        if (coreEntity != null && coreEntity.isValid()) {
+            coreEntity.damage(amount);
         }
     }
 
-    public ModelInstance getModel() {
-        return model;
+    public void despawn() {
+        if (coreEntity != null) coreEntity.remove();
+        if (hitbox != null) hitbox.remove();
+        if (modelInstance != null) modelInstance.despawn();
     }
+
+    public boolean isValid() {
+        return coreEntity != null && coreEntity.isValid() &&
+                hitbox != null && hitbox.isValid();
+    }
+
+    public UUID getUUID() { return uuid; }
+    public LivingEntity getCoreEntity() { return coreEntity; }
+    public Interaction getHitbox() { return hitbox; }
+    public ModelInstance getModelInstance() { return modelInstance; }
 }

@@ -1,128 +1,164 @@
 package com.mcbzh.custombosses.model;
 
 import org.bukkit.Location;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.ArrayList;
-import java.util.List;
+import org.bukkit.entity.BlockDisplay;
+import org.bukkit.entity.EntityType;
+import org.bukkit.util.Transformation;
+import org.joml.Matrix4f;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
+
+import java.util.*;
 
 public class ModelInstance {
+
     private final ModelData data;
     private Location rootLocation;
-    private final Map<String, ModelPart> parts = new HashMap<>();
-    private int hurtTicks = 0;
+    private final Map<String, Part> parts;
 
     public ModelInstance(ModelData data, Location location) {
         this.data = data;
         this.rootLocation = location.clone();
-    }
-
-    public Location getRootLocation() {
-        return rootLocation;
-    }
-
-    public void updateRootLocation(Location newLocation) {
-        this.rootLocation = newLocation.clone();
+        this.parts = new LinkedHashMap<>();
     }
 
     public void spawn() {
-        // Build parts in hierarchy order (parents first)
-        List<ModelPartData> orderedParts = buildHierarchyOrder();
+        // Spawn in hierarchy order
+        List<ModelData.PartData> ordered = getHierarchyOrder();
 
-        for (ModelPartData partData : orderedParts) {
-            ModelPart part = new ModelPart(partData, this);
-            parts.put(partData.getId(), part);
+        for (ModelData.PartData partData : ordered) {
+            Part part = new Part(partData);
             part.spawn(rootLocation);
+            parts.put(partData.id, part);
         }
+
         update();
     }
 
-    /**
-     * Orders parts so parents are created before children
-     */
-    private List<ModelPartData> buildHierarchyOrder() {
-        List<ModelPartData> ordered = new ArrayList<>();
-        List<ModelPartData> remaining = new ArrayList<>(data.getParts());
+    public void despawn() {
+        parts.values().forEach(Part::despawn);
+        parts.clear();
+    }
 
-        while (!remaining.isEmpty()) {
-            boolean addedAny = false;
-
-            for (int i = remaining.size() - 1; i >= 0; i--) {
-                ModelPartData part = remaining.get(i);
-
-                // Add if no parent or parent already added
-                if (part.getParentId() == null ||
-                        ordered.stream().anyMatch(p -> p.getId().equals(part.getParentId()))) {
-                    ordered.add(part);
-                    remaining.remove(i);
-                    addedAny = true;
-                }
+    public void update() {
+        List<ModelData.PartData> ordered = getHierarchyOrder();
+        for (ModelData.PartData partData : ordered) {
+            Part part = parts.get(partData.id);
+            if (part != null) {
+                part.update(rootLocation, parts);
             }
+        }
+    }
 
-            // Prevent infinite loop if hierarchy is broken
-            if (!addedAny && !remaining.isEmpty()) {
-                System.err.println("[CustomBosses] Warning: Broken hierarchy detected in model " + data.getId());
-                ordered.addAll(remaining);
-                break;
+    public void setRootLocation(Location location) {
+        this.rootLocation = location.clone();
+    }
+
+    public Location getRootLocation() {
+        return rootLocation.clone();
+    }
+
+    public Map<String, Part> getParts() {
+        return parts;
+    }
+
+    public ModelData getData() {
+        return data;
+    }
+
+    private List<ModelData.PartData> getHierarchyOrder() {
+        List<ModelData.PartData> ordered = new ArrayList<>();
+        Set<String> added = new HashSet<>();
+        Queue<ModelData.PartData> queue = new LinkedList<>(data.getParts());
+
+        while (!queue.isEmpty()) {
+            ModelData.PartData part = queue.poll();
+
+            if (part.parentId == null || added.contains(part.parentId)) {
+                ordered.add(part);
+                added.add(part.id);
+            } else {
+                queue.offer(part);
             }
         }
 
         return ordered;
     }
 
-    public void update() {
-        // Update all parts in hierarchy order
-        List<ModelPartData> orderedParts = buildHierarchyOrder();
+    // Inner class representing a spawned part
+    public static class Part {
+        private final ModelData.PartData data;
+        private BlockDisplay entity;
+        private final Matrix4f globalMatrix;
 
-        for (ModelPartData partData : orderedParts) {
-            ModelPart part = parts.get(partData.getId());
-            if (part != null) {
-                part.updateTransform(rootLocation);
+        public Part(ModelData.PartData data) {
+            this.data = data;
+            this.globalMatrix = new Matrix4f();
+        }
+
+        public void spawn(Location root) {
+            entity = (BlockDisplay) root.getWorld().spawnEntity(root, EntityType.BLOCK_DISPLAY);
+            entity.setBlock(data.material.createBlockData());
+        }
+
+        public void despawn() {
+            if (entity != null) {
+                entity.remove();
+                entity = null;
             }
         }
-    }
 
-    public void tick() {
-        if (hurtTicks > 0) {
-            hurtTicks--;
-        }
-        update();
-    }
+        public void update(Location root, Map<String, Part> allParts) {
+            if (entity == null) return;
 
-    public void despawn() {
-        for (ModelPart part : parts.values()) {
-            part.despawn();
-        }
-        parts.clear();
-    }
+            // Calculate global matrix
+            globalMatrix.identity();
 
-    public void hurt() {
-        hurtTicks = 10; // Red flash for 10 ticks
-        // Make all parts glow red temporarily
-        for (ModelPart part : parts.values()) {
-            if (part.getEntity() != null) {
-                part.getEntity().setGlowing(true);
-                // Schedule to remove glow
-                org.bukkit.Bukkit.getScheduler().runTaskLater(
-                        com.mcbzh.custombosses.CustomBossesPlugin.getInstance(),
-                        () -> {
-                            if (part.getEntity() != null) {
-                                part.getEntity().setGlowing(false);
-                            }
-                        }, 10L);
+            // Apply parent transform
+            if (data.parentId != null) {
+                Part parent = allParts.get(data.parentId);
+                if (parent != null) {
+                    globalMatrix.set(parent.globalMatrix);
+                }
             }
+
+            // Apply local transform
+            globalMatrix.translate((float) data.position.getX(),
+                    (float) data.position.getY(),
+                    (float) data.position.getZ());
+
+            globalMatrix.rotateXYZ(
+                    (float) Math.toRadians(data.rotation.getX()),
+                    (float) Math.toRadians(data.rotation.getY()),
+                    (float) Math.toRadians(data.rotation.getZ())
+            );
+
+            globalMatrix.scale((float) data.scale.getX(),
+                    (float) data.scale.getY(),
+                    (float) data.scale.getZ());
+
+            // Apply to entity
+            entity.teleport(root);
+
+            Vector3f translation = globalMatrix.getTranslation(new Vector3f());
+            Quaternionf rotation = globalMatrix.getUnnormalizedRotation(new Quaternionf());
+            Vector3f scale = globalMatrix.getScale(new Vector3f());
+
+            entity.setTransformation(new Transformation(
+                    translation, rotation, scale, new Quaternionf()
+            ));
         }
-    }
 
-    public ModelPart getPart(String id) {
-        return parts.get(id);
-    }
+        public BlockDisplay getEntity() {
+            return entity;
+        }
 
-    public Map<String, ModelPart> getParts() {
-        return parts;
-    }
+        public ModelData.PartData getData() {
+            return data;
+        }
 
-    public ModelData getData() {
-        return data;
+        public String getId() {
+            return data.id;
+        }
     }
 }

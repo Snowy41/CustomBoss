@@ -1,54 +1,56 @@
 package com.mcbzh.custombosses;
 
-import com.mcbzh.custombosses.commands.EditorCommand;
+import com.mcbzh.custombosses.commands.BossCommand;
+import com.mcbzh.custombosses.editor.EditorManager;
 import com.mcbzh.custombosses.listeners.BossListener;
+import com.mcbzh.custombosses.listeners.EditorListener;
+import com.mcbzh.custombosses.manager.BossManager;
+import com.mcbzh.custombosses.storage.ModelStorage;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public class CustomBossesPlugin extends JavaPlugin {
 
     private static CustomBossesPlugin instance;
-
     private BossManager bossManager;
-    private ConfigManager configManager;
-    private com.mcbzh.custombosses.editor.EditorManager editorManager;
-    private com.mcbzh.custombosses.animation.AnimationManager animationManager;
+    private EditorManager editorManager;
+    private ModelStorage modelStorage;
 
     @Override
     public void onEnable() {
         instance = this;
 
+        // Create data folders
+        getDataFolder().mkdirs();
+
+        // Initialize storage
+        this.modelStorage = new ModelStorage(this);
+
         // Initialize managers
-        this.configManager = new ConfigManager(this);
         this.bossManager = new BossManager(this);
-        this.editorManager = new com.mcbzh.custombosses.editor.EditorManager(this);
-        this.animationManager = new com.mcbzh.custombosses.animation.AnimationManager(this);
+        this.editorManager = new EditorManager(this);
 
         // Register commands
-        EditorCommand editorCommand = new EditorCommand(this);
-        getCommand("cb").setExecutor(editorCommand);
-        getCommand("cb").setTabCompleter(editorCommand);
+        BossCommand cmd = new BossCommand(this);
+        getCommand("cb").setExecutor(cmd);
+        getCommand("cb").setTabCompleter(cmd);
 
         // Register listeners
         getServer().getPluginManager().registerEvents(new BossListener(this), this);
+        getServer().getPluginManager().registerEvents(new EditorListener(this), this);
 
-        getLogger().info("CustomBosses has been enabled!");
-        getLogger().info("Loaded " + configManager.getAllModels().size() + " models");
+        getLogger().info("CustomBosses enabled!");
+        getLogger().info("Loaded " + modelStorage.getAllModels().size() + " models");
     }
 
     @Override
     public void onDisable() {
-        // Clean shutdown - despawn all bosses
         if (bossManager != null) {
-            bossManager.removeAllBosses();
-            getLogger().info("Despawned all active bosses");
+            bossManager.shutdown();
         }
-
-        // Clean up editor sessions
         if (editorManager != null) {
-            editorManager.cleanupAll();
+            editorManager.shutdown();
         }
-
-        getLogger().info("CustomBosses has been disabled!");
+        getLogger().info("CustomBosses disabled!");
     }
 
     public static CustomBossesPlugin getInstance() {
@@ -59,15 +61,11 @@ public class CustomBossesPlugin extends JavaPlugin {
         return bossManager;
     }
 
-    public ConfigManager getConfigManager() {
-        return configManager;
-    }
-
-    public com.mcbzh.custombosses.editor.EditorManager getEditorManager() {
+    public EditorManager getEditorManager() {
         return editorManager;
     }
 
-    public com.mcbzh.custombosses.animation.AnimationManager getAnimationManager() {
-        return animationManager;
+    public ModelStorage getModelStorage() {
+        return modelStorage;
     }
 }

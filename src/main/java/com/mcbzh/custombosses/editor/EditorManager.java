@@ -1,103 +1,59 @@
 package com.mcbzh.custombosses.editor;
 
 import com.mcbzh.custombosses.CustomBossesPlugin;
-import com.mcbzh.custombosses.editor.tools.EditorTool;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.Listener;
-import org.bukkit.event.player.AsyncPlayerChatEvent;
-import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.scheduler.BukkitTask;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 
-public class EditorManager implements Listener {
+public class EditorManager {
 
-    private final Map<UUID, EditorSession> sessions = new HashMap<>();
     private final CustomBossesPlugin plugin;
+    private final Map<UUID, EditorSession> sessions;
+    private BukkitTask tickTask;
 
     public EditorManager(CustomBossesPlugin plugin) {
         this.plugin = plugin;
-        Bukkit.getPluginManager().registerEvents(this, plugin);
+        this.sessions = new HashMap<>();
+        startTicking();
+    }
 
-        // Tick task for visual guides
-        Bukkit.getScheduler().runTaskTimer(plugin, this::tick, 1L, 1L);
+    private void startTicking() {
+        tickTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tick, 1L, 1L);
+    }
+
+    private void tick() {
+        sessions.values().forEach(EditorSession::tick);
+
+        // Clean up invalid sessions
+        sessions.entrySet().removeIf(entry -> {
+            Player player = Bukkit.getPlayer(entry.getKey());
+            if (player == null || !player.isOnline()) {
+                entry.getValue().exit();
+                return true;
+            }
+            return false;
+        });
     }
 
     public EditorSession getSession(Player player) {
-        return sessions.computeIfAbsent(player.getUniqueId(), uuid -> new EditorSession(uuid));
+        return sessions.computeIfAbsent(player.getUniqueId(),
+                uuid -> new EditorSession(player, plugin));
     }
 
     public void removeSession(Player player) {
         EditorSession session = sessions.remove(player.getUniqueId());
         if (session != null) {
-            session.exitEditor();
+            session.exit();
         }
     }
 
-    public void cleanupAll() {
-        for (EditorSession session : sessions.values()) {
-            Player player = session.getPlayer();
-            if (player != null && player.isOnline()) {
-                session.exitEditor();
-            }
+    public void shutdown() {
+        if (tickTask != null) {
+            tickTask.cancel();
         }
+        sessions.values().forEach(EditorSession::exit);
         sessions.clear();
-    }
-
-    private void tick() {
-        sessions.values().removeIf(session -> {
-            Player player = session.getPlayer();
-            if (player == null || !player.isOnline()) {
-                session.exitEditor();
-                return true;
-            }
-            session.tick();
-            return false;
-        });
-    }
-
-    @EventHandler
-    public void onQuit(PlayerQuitEvent event) {
-        removeSession(event.getPlayer());
-    }
-
-    @EventHandler
-    public void onPlayerInteract(PlayerInteractEvent event) {
-        if (event.getHand() == org.bukkit.inventory.EquipmentSlot.OFF_HAND) {
-            return;
-        }
-
-        Player player = event.getPlayer();
-        EditorSession session = sessions.get(player.getUniqueId());
-
-        if (session != null && session.isInEditor()) {
-            int slot = player.getInventory().getHeldItemSlot();
-            EditorTool tool = session.getTool(slot);
-
-            if (tool != null) {
-                event.setCancelled(true);
-                tool.onUse(player, event.getAction());
-            }
-        }
-    }
-
-    @EventHandler
-    public void onChat(AsyncPlayerChatEvent event) {
-        Player player = event.getPlayer();
-        EditorSession session = sessions.get(player.getUniqueId());
-
-        if (session != null && session.isWaitingForChatInput()) {
-            event.setCancelled(true);
-
-            // Handle on main thread
-            String message = event.getMessage();
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                session.handleChatInput(message);
-            });
-        }
     }
 }
