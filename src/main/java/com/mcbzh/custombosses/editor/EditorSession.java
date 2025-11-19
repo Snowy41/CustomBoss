@@ -3,14 +3,13 @@ package com.mcbzh.custombosses.editor;
 import com.mcbzh.custombosses.CustomBossesPlugin;
 import com.mcbzh.custombosses.model.ModelData;
 import com.mcbzh.custombosses.model.ModelInstance;
-import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.BlockDisplay;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.util.RayTraceResult;
 import org.bukkit.util.Vector;
 
 import java.util.*;
@@ -25,6 +24,7 @@ public class EditorSession {
     private ModelData currentModel;
     private ModelInstance currentInstance;
     private BlockDisplay selectedPart;
+    private String selectedPartId;
 
     // Root marker for model center
     private BlockDisplay rootMarker;
@@ -34,9 +34,19 @@ public class EditorSession {
     private final GizmoManager gizmoManager;
     private final DebugVisualizer debugVisualizer;
 
+    // Transform modes
+    private enum TransformMode {
+        NONE, MOVE, ROTATE, SCALE
+    }
+    private TransformMode currentTransformMode = TransformMode.NONE;
+    private enum TransformAxis {
+        X, Y, Z, ALL
+    }
+    private TransformAxis currentAxis = TransformAxis.ALL;
+
     // Crosshair movement mode
     private boolean crosshairMoveMode = false;
-    private double crosshairDistance = 3.0; // Distance from player eyes
+    private double crosshairDistance = 3.0;
 
     private boolean awaitingChatInput;
     private Consumer<String> chatCallback;
@@ -55,25 +65,19 @@ public class EditorSession {
     }
 
     public void openHub() {
-        // Open main editor menu
         EditorGUI.openMainMenu(player, this);
     }
 
     public void editModel(String modelId) {
-        // Load or create model
         currentModel = plugin.getModelStorage().get(modelId);
         if (currentModel == null) {
             currentModel = new ModelData(modelId);
             plugin.getModelStorage().save(currentModel);
         }
 
-        // Set fixed root location at player's current position
         fixedRootLocation = player.getLocation().clone();
-
-        // Spawn visual root marker
         spawnRootMarker();
 
-        // Spawn instance at fixed root
         currentInstance = new ModelInstance(currentModel, fixedRootLocation);
         currentInstance.spawn();
 
@@ -83,9 +87,9 @@ public class EditorSession {
         player.getInventory().clear();
         player.getInventory().setItem(0, createTool(Material.EMERALD, "§aSpawn Part", "spawn"));
         player.getInventory().setItem(1, createTool(Material.SPECTRAL_ARROW, "§eSelect Part", "select"));
-        player.getInventory().setItem(2, createTool(Material.STICK, "§6Move Tool §7(Right-click: Toggle Crosshair)", "move"));
-        player.getInventory().setItem(3, createTool(Material.BLAZE_ROD, "§6Rotate Tool", "rotate"));
-        player.getInventory().setItem(4, createTool(Material.SLIME_BALL, "§6Scale Tool", "scale"));
+        player.getInventory().setItem(2, createTool(Material.STICK, "§6Move Tool §7(Sneak: Toggle Axis)", "move"));
+        player.getInventory().setItem(3, createTool(Material.BLAZE_ROD, "§6Rotate Tool §7(Sneak: Toggle Axis)", "rotate"));
+        player.getInventory().setItem(4, createTool(Material.SLIME_BALL, "§6Scale Tool §7(Sneak: Toggle Axis)", "scale"));
         player.getInventory().setItem(5, createTool(Material.LEAD, "§dParent Tool", "parent"));
         player.getInventory().setItem(6, createTool(Material.MAGMA_CREAM, "§bMaterial Tool", "material"));
         player.getInventory().setItem(7, createTool(Material.TNT, "§cDelete Part", "delete"));
@@ -95,11 +99,11 @@ public class EditorSession {
         player.sendMessage("§7Parts: " + currentModel.getParts().size());
         player.sendMessage("§7Root at: " + String.format("%.1f, %.1f, %.1f",
                 fixedRootLocation.getX(), fixedRootLocation.getY(), fixedRootLocation.getZ()));
-        player.sendMessage("§7Use hotbar tools to edit");
-        player.sendMessage("§e§lTips:");
-        player.sendMessage("§7- Right-click Move Tool to enable crosshair mode");
-        player.sendMessage("§7- Scroll while holding Scale/Rotate for fine control");
-        player.sendMessage("§7- Hold block in offhand + Material Tool to change color");
+        player.sendMessage("§e§lTransform Controls:");
+        player.sendMessage("§7- Left-Click: Apply transform");
+        player.sendMessage("§7- Right-Click: Toggle axis (X/Y/Z/All)");
+        player.sendMessage("§7- Scroll: Fine-tune value");
+        player.sendMessage("§7- Sneak + Tool: Toggle crosshair mode");
     }
 
     public void exit() {
@@ -123,7 +127,6 @@ public class EditorSession {
             rootMarker = null;
         }
 
-        // Clean up gizmos and debug displays
         gizmoManager.hideGizmo();
         debugVisualizer.clearAll();
 
@@ -131,6 +134,8 @@ public class EditorSession {
         active = false;
         currentModel = null;
         fixedRootLocation = null;
+        selectedPartId = null;
+        currentTransformMode = TransformMode.NONE;
     }
 
     public void handleToolUse(String tool, boolean rightClick) {
@@ -141,13 +146,32 @@ public class EditorSession {
             case "select" -> handleSelect();
             case "move" -> {
                 if (rightClick) {
-                    toggleCrosshairMode();
+                    cycleAxis();
                 } else {
-                    handleTransform("position", -0.1);
+                    if (player.isSneaking()) {
+                        toggleCrosshairMode();
+                    } else {
+                        currentTransformMode = TransformMode.MOVE;
+                        handleTransformClick();
+                    }
                 }
             }
-            case "rotate" -> handleTransform("rotation", rightClick ? 15 : -15);
-            case "scale" -> handleTransform("scale", rightClick ? 0.1 : -0.1);
+            case "rotate" -> {
+                if (rightClick) {
+                    cycleAxis();
+                } else {
+                    currentTransformMode = TransformMode.ROTATE;
+                    handleTransformClick();
+                }
+            }
+            case "scale" -> {
+                if (rightClick) {
+                    cycleAxis();
+                } else {
+                    currentTransformMode = TransformMode.SCALE;
+                    handleTransformClick();
+                }
+            }
             case "parent" -> handleParent();
             case "material" -> handleMaterial();
             case "delete" -> handleDelete();
@@ -158,60 +182,181 @@ public class EditorSession {
         }
     }
 
-    public void handleScrollTransform(String type, double delta) {
-        if (!active || currentInstance == null) return;
-        handleTransform(type, delta);
+    private void cycleAxis() {
+        currentAxis = switch (currentAxis) {
+            case ALL -> TransformAxis.X;
+            case X -> TransformAxis.Y;
+            case Y -> TransformAxis.Z;
+            case Z -> TransformAxis.ALL;
+        };
+
+        String color = switch (currentAxis) {
+            case X -> "§c";
+            case Y -> "§a";
+            case Z -> "§9";
+            case ALL -> "§e";
+        };
+
+        player.sendMessage(color + "Axis: " + currentAxis);
+    }
+
+    private void handleTransformClick() {
+        if (selectedPartId == null) {
+            player.sendMessage("§cNo part selected!");
+            return;
+        }
+
+        ModelInstance.Part part = currentInstance.getParts().get(selectedPartId);
+        if (part == null) return;
+
+        ModelData.PartData data = part.getData();
+
+        // Calculate movement based on player's view direction
+        Location eyeLoc = player.getEyeLocation();
+        Vector direction = eyeLoc.getDirection();
+
+        double amount = 0.1; // Base movement amount
+
+        Vector oldPos = data.position.clone();
+        Vector oldRot = data.rotation.clone();
+        Vector oldScale = data.scale.clone();
+
+        switch (currentTransformMode) {
+            case MOVE -> {
+                // Move in the direction player is looking, constrained to axis
+                Vector movement = direction.clone().multiply(amount);
+
+                switch (currentAxis) {
+                    case X -> data.position.setX(data.position.getX() + movement.getX());
+                    case Y -> data.position.setY(data.position.getY() + amount); // Always up/down
+                    case Z -> data.position.setZ(data.position.getZ() + movement.getZ());
+                    case ALL -> {
+                        // Project movement onto view plane
+                        data.position.add(movement);
+                    }
+                }
+            }
+            case ROTATE -> {
+                double rotAmount = 15.0;
+                switch (currentAxis) {
+                    case X -> data.rotation.setX(data.rotation.getX() + rotAmount);
+                    case Y -> data.rotation.setY(data.rotation.getY() + rotAmount);
+                    case Z -> data.rotation.setZ(data.rotation.getZ() + rotAmount);
+                    case ALL -> data.rotation.setY(data.rotation.getY() + rotAmount); // Default to Y
+                }
+            }
+            case SCALE -> {
+                double scaleAmount = 0.1;
+                switch (currentAxis) {
+                    case X -> data.scale.setX(Math.max(0.01, data.scale.getX() + scaleAmount));
+                    case Y -> data.scale.setY(Math.max(0.01, data.scale.getY() + scaleAmount));
+                    case Z -> data.scale.setZ(Math.max(0.01, data.scale.getZ() + scaleAmount));
+                    case ALL -> {
+                        data.scale.setX(Math.max(0.01, data.scale.getX() + scaleAmount));
+                        data.scale.setY(Math.max(0.01, data.scale.getY() + scaleAmount));
+                        data.scale.setZ(Math.max(0.01, data.scale.getZ() + scaleAmount));
+                    }
+                }
+            }
+        }
+
+        currentInstance.update();
+        refreshSelection(); // Update selection to new position
+        recordAction(new TransformAction(data, oldPos, oldRot, oldScale));
+    }
+
+    public void handleScrollTransform(double delta) {
+        if (!active || currentInstance == null || selectedPartId == null) return;
+
+        ModelInstance.Part part = currentInstance.getParts().get(selectedPartId);
+        if (part == null) return;
+
+        ModelData.PartData data = part.getData();
+        Vector oldPos = data.position.clone();
+        Vector oldRot = data.rotation.clone();
+        Vector oldScale = data.scale.clone();
+
+        // Adjust based on current mode
+        double moveAmount = delta * 0.05;
+        double rotateAmount = delta * 5.0;
+        double scaleAmount = delta * 0.05;
+
+        switch (currentTransformMode) {
+            case MOVE -> {
+                switch (currentAxis) {
+                    case X -> data.position.setX(data.position.getX() + moveAmount);
+                    case Y -> data.position.setY(data.position.getY() + moveAmount);
+                    case Z -> data.position.setZ(data.position.getZ() + moveAmount);
+                    case ALL -> data.position.setY(data.position.getY() + moveAmount);
+                }
+            }
+            case ROTATE -> {
+                switch (currentAxis) {
+                    case X -> data.rotation.setX(data.rotation.getX() + rotateAmount);
+                    case Y -> data.rotation.setY(data.rotation.getY() + rotateAmount);
+                    case Z -> data.rotation.setZ(data.rotation.getZ() + rotateAmount);
+                    case ALL -> data.rotation.setY(data.rotation.getY() + rotateAmount);
+                }
+            }
+            case SCALE -> {
+                switch (currentAxis) {
+                    case X -> data.scale.setX(Math.max(0.01, data.scale.getX() + scaleAmount));
+                    case Y -> data.scale.setY(Math.max(0.01, data.scale.getY() + scaleAmount));
+                    case Z -> data.scale.setZ(Math.max(0.01, data.scale.getZ() + scaleAmount));
+                    case ALL -> {
+                        data.scale.setX(Math.max(0.01, data.scale.getX() + scaleAmount));
+                        data.scale.setY(Math.max(0.01, data.scale.getY() + scaleAmount));
+                        data.scale.setZ(Math.max(0.01, data.scale.getZ() + scaleAmount));
+                    }
+                }
+            }
+        }
+
+        currentInstance.update();
+        refreshSelection();
+        recordAction(new TransformAction(data, oldPos, oldRot, oldScale));
     }
 
     public void adjustCrosshairDistance(double delta) {
         crosshairDistance = Math.max(0.5, Math.min(10.0, crosshairDistance + delta));
-        player.sendMessage("§7Crosshair distance: §e" + String.format("%.1f", crosshairDistance) + " blocks");
+        player.sendMessage("§7Crosshair distance: §e" + String.format("%.1f", crosshairDistance));
     }
 
     private void toggleCrosshairMode() {
         crosshairMoveMode = !crosshairMoveMode;
         if (crosshairMoveMode) {
-            if (selectedPart == null) {
+            if (selectedPartId == null) {
                 player.sendMessage("§cSelect a part first!");
                 crosshairMoveMode = false;
                 return;
             }
             player.sendMessage("§a§lCrosshair Move Mode: ON");
             player.sendMessage("§7Part will follow your crosshair");
-            player.sendMessage("§7Scroll to adjust distance (current: " + String.format("%.1f", crosshairDistance) + ")");
-            player.sendMessage("§7Right-click again to lock position");
+            player.sendMessage("§7Scroll to adjust distance");
+            player.sendMessage("§7Sneak + Tool again to lock position");
         } else {
             player.sendMessage("§c§lCrosshair Move Mode: OFF");
-            player.sendMessage("§7Position locked");
         }
     }
 
     private void handleSpawn() {
-        if (fixedRootLocation == null || currentModel == null || currentInstance == null) {
-            player.sendMessage("§cEditor not properly initialized!");
-            return;
-        }
+        if (fixedRootLocation == null || currentModel == null || currentInstance == null) return;
 
         String id = "part_" + System.currentTimeMillis();
 
-        // Spawn at player's current crosshair location (3 blocks ahead)
         Location eyeLoc = player.getEyeLocation();
         Location targetLoc = eyeLoc.clone().add(eyeLoc.getDirection().multiply(3.0));
-
-        // Calculate offset relative to FIXED root location
         Vector offset = targetLoc.toVector().subtract(fixedRootLocation.toVector());
 
         ModelData.PartData newPart = new ModelData.PartData(id);
         newPart.position = offset;
         currentModel.addPart(newPart);
 
-        // Respawn instance at the SAME fixed root
         currentInstance.despawn();
         currentInstance = new ModelInstance(currentModel, fixedRootLocation);
         currentInstance.spawn();
 
-        player.sendMessage("§aSpawned: " + id + " at offset " +
-                String.format("§7(%.2f, %.2f, %.2f)", offset.getX(), offset.getY(), offset.getZ()));
+        player.sendMessage("§aSpawned: " + id);
     }
 
     private void handleSelect() {
@@ -220,33 +365,29 @@ public class EditorSession {
             return;
         }
 
-        // Find BlockDisplay player is looking at
+        // Raycast to find BlockDisplay
+        Location eyeLoc = player.getEyeLocation();
+        Vector direction = eyeLoc.getDirection();
+
         BlockDisplay closest = null;
+        String closestId = null;
         double closestDist = Double.MAX_VALUE;
 
-        Location eyeLoc = player.getEyeLocation();
-        Vector lookDir = eyeLoc.getDirection().normalize();
-
-        for (ModelInstance.Part part : currentInstance.getParts().values()) {
-            BlockDisplay entity = part.getEntity();
+        for (Map.Entry<String, ModelInstance.Part> entry : currentInstance.getParts().entrySet()) {
+            BlockDisplay entity = entry.getValue().getEntity();
             if (entity == null || !entity.isValid()) continue;
 
             Location partLoc = entity.getLocation();
             double dist = eyeLoc.distance(partLoc);
 
-            // Skip if too far
             if (dist > 10) continue;
 
-            // Calculate direction to entity
-            Vector toEntity = partLoc.toVector()
-                    .subtract(eyeLoc.toVector())
-                    .normalize();
+            Vector toEntity = partLoc.toVector().subtract(eyeLoc.toVector()).normalize();
+            double dot = toEntity.dot(direction);
 
-            // Check if player is looking at it (more lenient threshold)
-            double dot = toEntity.dot(lookDir);
-
-            if (dot > 0.7 && dist < closestDist) {
+            if (dot > 0.85 && dist < closestDist) {
                 closest = entity;
+                closestId = entry.getKey();
                 closestDist = dist;
             }
         }
@@ -258,70 +399,24 @@ public class EditorSession {
 
         if (closest != null) {
             selectedPart = closest;
+            selectedPartId = closestId;
             selectedPart.setGlowing(true);
-
-            final BlockDisplay finalClosest = closest; // Make effectively final for lambda
-            String partId = currentInstance.getParts().values().stream()
-                    .filter(p -> p.getEntity() != null && p.getEntity().equals(finalClosest))
-                    .findFirst()
-                    .map(ModelInstance.Part::getId)
-                    .orElse("unknown");
-
-            player.sendMessage("§aSelected: " + partId);
+            player.sendMessage("§aSelected: " + closestId);
         } else {
             selectedPart = null;
-            player.sendMessage("§7Deselected (no part in view)");
+            selectedPartId = null;
+            player.sendMessage("§7Deselected");
         }
     }
 
-    private void handleTransform(String type, double delta) {
-        if (selectedPart == null || !selectedPart.isValid()) {
-            player.sendMessage("§cNo part selected!");
-            return;
-        }
-
-        if (currentInstance == null) {
-            player.sendMessage("§cInstance not available!");
-            return;
-        }
-
-        final BlockDisplay finalSelected = selectedPart; // Make effectively final
-        ModelInstance.Part part = currentInstance.getParts().values().stream()
-                .filter(p -> p.getEntity() != null && p.getEntity().equals(finalSelected))
-                .findFirst()
-                .orElse(null);
-
-        if (part == null) {
-            player.sendMessage("§cPart not found in instance!");
-            return;
-        }
-
-        ModelData.PartData data = part.getData();
-        Vector oldPos = data.position.clone();
-        Vector oldRot = data.rotation.clone();
-        Vector oldScale = data.scale.clone();
-
-        if (player.isSneaking()) {
-            // Shift = Z axis
-            switch (type) {
-                case "position" -> data.position.setZ(data.position.getZ() + delta);
-                case "rotation" -> data.rotation.setZ(data.rotation.getZ() + delta);
-                case "scale" -> data.scale.setZ(Math.max(0.01, data.scale.getZ() + delta));
-            }
-        } else {
-            // Normal = Y axis
-            switch (type) {
-                case "position" -> data.position.setY(data.position.getY() + delta);
-                case "rotation" -> data.rotation.setY(data.rotation.getY() + delta);
-                case "scale" -> data.scale.setY(Math.max(0.01, data.scale.getY() + delta));
+    private void refreshSelection() {
+        if (selectedPartId != null && currentInstance != null) {
+            ModelInstance.Part part = currentInstance.getParts().get(selectedPartId);
+            if (part != null && part.getEntity() != null && part.getEntity().isValid()) {
+                selectedPart = part.getEntity();
+                selectedPart.setGlowing(true);
             }
         }
-
-        currentInstance.update();
-        recordAction(new TransformAction(data, oldPos, oldRot, oldScale));
-
-        player.sendMessage(String.format("§7%s: %.2f, %.2f, %.2f",
-                type, data.position.getX(), data.position.getY(), data.position.getZ()));
     }
 
     private void handleParent() {
@@ -329,13 +424,8 @@ public class EditorSession {
     }
 
     private void handleMaterial() {
-        if (selectedPart == null || !selectedPart.isValid()) {
+        if (selectedPartId == null) {
             player.sendMessage("§cNo part selected!");
-            return;
-        }
-
-        if (currentInstance == null) {
-            player.sendMessage("§cInstance not available!");
             return;
         }
 
@@ -345,52 +435,28 @@ public class EditorSession {
             return;
         }
 
-        final BlockDisplay finalSelected = selectedPart; // Make effectively final
-        ModelInstance.Part part = currentInstance.getParts().values().stream()
-                .filter(p -> p.getEntity() != null && p.getEntity().equals(finalSelected))
-                .findFirst()
-                .orElse(null);
-
-        if (part != null) {
+        ModelInstance.Part part = currentInstance.getParts().get(selectedPartId);
+        if (part != null && selectedPart != null) {
             part.getData().material = offhand.getType();
             selectedPart.setBlock(offhand.getType().createBlockData());
             player.sendMessage("§aMaterial changed to " + offhand.getType());
-        } else {
-            player.sendMessage("§cPart not found!");
         }
     }
 
     private void handleDelete() {
-        if (selectedPart == null || !selectedPart.isValid()) {
+        if (selectedPartId == null) {
             player.sendMessage("§cNo part selected!");
             return;
         }
 
-        if (currentInstance == null || fixedRootLocation == null) {
-            player.sendMessage("§cInstance not available!");
-            return;
-        }
+        currentModel.removePart(selectedPartId);
+        currentInstance.despawn();
+        currentInstance = new ModelInstance(currentModel, fixedRootLocation);
+        currentInstance.spawn();
 
-        final BlockDisplay finalSelected = selectedPart; // Make effectively final
-        ModelInstance.Part part = currentInstance.getParts().values().stream()
-                .filter(p -> p.getEntity() != null && p.getEntity().equals(finalSelected))
-                .findFirst()
-                .orElse(null);
-
-        if (part != null) {
-            String id = part.getId();
-            currentModel.removePart(id);
-
-            // Respawn at fixed root
-            currentInstance.despawn();
-            currentInstance = new ModelInstance(currentModel, fixedRootLocation);
-            currentInstance.spawn();
-
-            selectedPart = null;
-            player.sendMessage("§cDeleted: " + id);
-        } else {
-            player.sendMessage("§cPart not found!");
-        }
+        selectedPart = null;
+        selectedPartId = null;
+        player.sendMessage("§cDeleted part");
     }
 
     public void undo() {
@@ -399,6 +465,7 @@ public class EditorSession {
             action.undo();
             redoStack.push(action);
             currentInstance.update();
+            refreshSelection();
             player.sendMessage("§eUndid action");
         }
     }
@@ -409,6 +476,7 @@ public class EditorSession {
             action.redo();
             undoStack.push(action);
             currentInstance.update();
+            refreshSelection();
             player.sendMessage("§eRedid action");
         }
     }
@@ -419,31 +487,25 @@ public class EditorSession {
     }
 
     public void tick() {
-        // Keep selected part glowing
         if (selectedPart != null && selectedPart.isValid() && !selectedPart.isGlowing()) {
             selectedPart.setGlowing(true);
         }
 
-        // Crosshair movement mode
-        if (crosshairMoveMode && selectedPart != null && selectedPart.isValid() && currentInstance != null && fixedRootLocation != null) {
+        // Crosshair movement
+        if (crosshairMoveMode && selectedPartId != null && currentInstance != null && fixedRootLocation != null) {
             updateCrosshairMovement();
         }
 
-        // Keep root marker visible and at correct location
+        // Root marker
         if (active && fixedRootLocation != null) {
             if (rootMarker == null || !rootMarker.isValid()) {
                 spawnRootMarker();
             }
         }
 
-        // Update gizmo for selected part
-        if (selectedPart != null && selectedPart.isValid() && currentInstance != null) {
-            final BlockDisplay finalSelected = selectedPart;
-            ModelInstance.Part part = currentInstance.getParts().values().stream()
-                    .filter(p -> p.getEntity() != null && p.getEntity().equals(finalSelected))
-                    .findFirst()
-                    .orElse(null);
-
+        // Gizmo update
+        if (selectedPart != null && selectedPart.isValid() && currentInstance != null && selectedPartId != null) {
+            ModelInstance.Part part = currentInstance.getParts().get(selectedPartId);
             if (part != null) {
                 Vector rot = part.getData().rotation;
                 org.joml.Quaternionf rotation = new org.joml.Quaternionf()
@@ -458,49 +520,35 @@ public class EditorSession {
     }
 
     private void updateCrosshairMovement() {
-        final BlockDisplay finalSelected = selectedPart;
-        ModelInstance.Part part = currentInstance.getParts().values().stream()
-                .filter(p -> p.getEntity() != null && p.getEntity().equals(finalSelected))
-                .findFirst()
-                .orElse(null);
-
+        ModelInstance.Part part = currentInstance.getParts().get(selectedPartId);
         if (part == null) return;
 
-        // Calculate target position from player's crosshair
         Location eyeLoc = player.getEyeLocation();
         Location targetLoc = eyeLoc.clone().add(eyeLoc.getDirection().multiply(crosshairDistance));
-
-        // Convert to offset from root
         Vector newOffset = targetLoc.toVector().subtract(fixedRootLocation.toVector());
 
-        // Update part position
-        ModelData.PartData data = part.getData();
-        data.position = newOffset;
-
-        // Update visual
+        part.getData().position = newOffset;
         currentInstance.update();
+        refreshSelection();
     }
 
     private void spawnRootMarker() {
         if (fixedRootLocation == null) return;
 
-        // Remove old marker if exists
         if (rootMarker != null && rootMarker.isValid()) {
             rootMarker.remove();
         }
 
-        // Spawn glowing beacon glass as root marker
         rootMarker = (BlockDisplay) fixedRootLocation.getWorld()
                 .spawnEntity(fixedRootLocation, org.bukkit.entity.EntityType.BLOCK_DISPLAY);
         rootMarker.setBlock(Material.BEACON.createBlockData());
         rootMarker.setGlowing(true);
         rootMarker.setGlowColorOverride(org.bukkit.Color.YELLOW);
 
-        // Make it small and centered
         org.bukkit.util.Transformation transform = new org.bukkit.util.Transformation(
-                new org.joml.Vector3f(-0.25f, 0f, -0.25f), // Offset to center
+                new org.joml.Vector3f(-0.25f, 0f, -0.25f),
                 new org.joml.Quaternionf(),
-                new org.joml.Vector3f(0.5f, 0.5f, 0.5f), // Half size
+                new org.joml.Vector3f(0.5f, 0.5f, 0.5f),
                 new org.joml.Quaternionf()
         );
         rootMarker.setTransformation(transform);
@@ -537,13 +585,11 @@ public class EditorSession {
     public DebugVisualizer getDebugVisualizer() { return debugVisualizer; }
     public ModelInstance getCurrentInstance() { return currentInstance; }
 
-    // Editor Action interface
     public interface EditorAction {
         void undo();
         void redo();
     }
 
-    // Transform Action
     private static class TransformAction implements EditorAction {
         private final ModelData.PartData part;
         private final Vector oldPos, oldRot, oldScale;

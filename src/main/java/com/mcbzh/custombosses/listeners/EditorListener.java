@@ -2,6 +2,7 @@ package com.mcbzh.custombosses.listeners;
 
 import com.mcbzh.custombosses.CustomBossesPlugin;
 import com.mcbzh.custombosses.editor.EditorSession;
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -9,6 +10,7 @@ import org.bukkit.event.block.Action;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
 
@@ -45,6 +47,46 @@ public class EditorListener implements Listener {
             boolean rightClick = event.getAction() == Action.RIGHT_CLICK_AIR ||
                     event.getAction() == Action.RIGHT_CLICK_BLOCK;
             session.handleToolUse(tool, rightClick);
+        }
+    }
+
+    @EventHandler
+    public void onItemHeldChange(PlayerItemHeldEvent event) {
+        Player player = event.getPlayer();
+        EditorSession session = plugin.getEditorManager().getSession(player);
+
+        if (!session.isActive()) return;
+
+        // Detect scroll direction
+        int previous = event.getPreviousSlot();
+        int current = event.getNewSlot();
+
+        // Calculate scroll delta (accounting for wraparound)
+        int delta;
+        if (previous == 0 && current == 8) {
+            delta = -1; // Scrolled down (wrapped)
+        } else if (previous == 8 && current == 0) {
+            delta = 1; // Scrolled up (wrapped)
+        } else {
+            delta = current - previous;
+        }
+
+        // Check if holding a transform tool
+        ItemStack heldItem = player.getInventory().getItem(previous);
+        if (heldItem != null && heldItem.hasItemMeta() && heldItem.getItemMeta().hasLore()) {
+            String lore = heldItem.getItemMeta().getLore().get(0);
+            if (lore.startsWith("§8tool:")) {
+                String tool = lore.substring(7);
+
+                // Only process scroll for transform tools
+                if (tool.equals("move") || tool.equals("rotate") || tool.equals("scale")) {
+                    event.setCancelled(true);
+                    session.handleScrollTransform(delta);
+
+                    // Keep player on the same slot
+                    player.getInventory().setHeldItemSlot(previous);
+                }
+            }
         }
     }
 
