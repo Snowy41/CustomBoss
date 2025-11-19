@@ -1,6 +1,10 @@
 package com.mcbzh.custombosses;
 
 import com.mcbzh.custombosses.model.ModelData;
+import com.mcbzh.custombosses.model.ModelPartData;
+import org.bukkit.Material;
+import org.bukkit.util.Vector;
+
 import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
@@ -18,85 +22,108 @@ public class ConfigManager {
     public void loadAll() {
         modelRegistry.clear();
         File[] files = serializer.listModelFiles();
+
         if (files != null) {
             for (File file : files) {
                 String id = file.getName().replace(".json", "");
                 ModelData model = serializer.loadModel(id);
                 if (model != null) {
                     modelRegistry.put(id, model);
+                    System.out.println("[CustomBosses] Loaded model: " + id);
                 }
             }
         }
 
-        // Create default if none exist
+        // Create default models if none exist
         if (modelRegistry.isEmpty()) {
+            System.out.println("[CustomBosses] No models found, creating defaults...");
             createGolemModel();
+            createSimpleModel();
         }
+    }
+
+    private void createSimpleModel() {
+        ModelData simple = new ModelData("simple_cube");
+        simple.setHitboxSize(new Vector(1.5, 2.0, 1.5));
+
+        // Just a single cube for testing
+        ModelPartData body = new ModelPartData(
+                "body",
+                Material.GOLD_BLOCK,
+                new Vector(0, 1, 0),
+                new Vector(0, 0, 0),
+                new Vector(1, 1, 1));
+        simple.addPart(body);
+
+        saveModel(simple);
+        System.out.println("[CustomBosses] Created simple test model");
     }
 
     private void createGolemModel() {
         ModelData golem = new ModelData("golem_boss");
+        golem.setHitboxSize(new Vector(1.5, 3.0, 1.5));
 
-        // Body (Root)
-        com.mcbzh.custombosses.model.ModelPartData body = new com.mcbzh.custombosses.model.ModelPartData(
+        // Body (Root) - Centered at Y=1.5
+        ModelPartData body = new ModelPartData(
                 "body",
-                org.bukkit.Material.IRON_BLOCK,
-                new org.bukkit.util.Vector(0, 1.5, 0),
-                new org.bukkit.util.Vector(0, 0, 0),
-                new org.bukkit.util.Vector(0.9, 1.2, 0.5));
+                Material.IRON_BLOCK,
+                new Vector(0, 1.5, 0),
+                new Vector(0, 0, 0),
+                new Vector(0.9, 1.2, 0.5));
         golem.addPart(body);
 
-        // Head
-        com.mcbzh.custombosses.model.ModelPartData head = new com.mcbzh.custombosses.model.ModelPartData(
+        // Head - On top of body
+        ModelPartData head = new ModelPartData(
                 "head",
-                org.bukkit.Material.CARVED_PUMPKIN,
-                new org.bukkit.util.Vector(0, 0.9, 0), // Relative to body
-                new org.bukkit.util.Vector(0, 0, 0),
-                new org.bukkit.util.Vector(0.6, 0.6, 0.6));
+                Material.CARVED_PUMPKIN,
+                new Vector(0, 0.8, 0), // Relative to body
+                new Vector(0, 0, 0),
+                new Vector(0.6, 0.6, 0.6));
         head.setParentId("body");
         golem.addPart(head);
 
-        // Left Arm
-        com.mcbzh.custombosses.model.ModelPartData leftArm = new com.mcbzh.custombosses.model.ModelPartData(
+        // Left Arm - Attached to body
+        ModelPartData leftArm = new ModelPartData(
                 "left_arm",
-                org.bukkit.Material.IRON_BLOCK,
-                new org.bukkit.util.Vector(-0.7, 0.2, 0),
-                new org.bukkit.util.Vector(0, 0, 0),
-                new org.bukkit.util.Vector(0.4, 1.1, 0.4));
+                Material.IRON_BLOCK,
+                new Vector(-0.7, 0.3, 0), // Left side, slightly down
+                new Vector(0, 0, 0),
+                new Vector(0.3, 0.9, 0.3));
         leftArm.setParentId("body");
         golem.addPart(leftArm);
 
-        // Right Arm
-        com.mcbzh.custombosses.model.ModelPartData rightArm = new com.mcbzh.custombosses.model.ModelPartData(
+        // Right Arm - Attached to body
+        ModelPartData rightArm = new ModelPartData(
                 "right_arm",
-                org.bukkit.Material.IRON_BLOCK,
-                new org.bukkit.util.Vector(0.7, 0.2, 0),
-                new org.bukkit.util.Vector(0, 0, 0),
-                new org.bukkit.util.Vector(0.4, 1.1, 0.4));
+                Material.IRON_BLOCK,
+                new Vector(0.7, 0.3, 0), // Right side, slightly down
+                new Vector(0, 0, 0),
+                new Vector(0.3, 0.9, 0.3));
         rightArm.setParentId("body");
         golem.addPart(rightArm);
 
-        // Left Leg
-        com.mcbzh.custombosses.model.ModelPartData leftLeg = new com.mcbzh.custombosses.model.ModelPartData(
+        // Left Leg - Below body
+        ModelPartData leftLeg = new ModelPartData(
                 "left_leg",
-                org.bukkit.Material.IRON_BLOCK,
-                new org.bukkit.util.Vector(-0.3, -1.0, 0),
-                new org.bukkit.util.Vector(0, 0, 0),
-                new org.bukkit.util.Vector(0.4, 1.0, 0.4));
+                Material.IRON_BLOCK,
+                new Vector(-0.25, -0.9, 0), // Left side, down
+                new Vector(0, 0, 0),
+                new Vector(0.3, 0.9, 0.3));
         leftLeg.setParentId("body");
         golem.addPart(leftLeg);
 
-        // Right Leg
-        com.mcbzh.custombosses.model.ModelPartData rightLeg = new com.mcbzh.custombosses.model.ModelPartData(
+        // Right Leg - Below body
+        ModelPartData rightLeg = new ModelPartData(
                 "right_leg",
-                org.bukkit.Material.IRON_BLOCK,
-                new org.bukkit.util.Vector(0.3, -1.0, 0),
-                new org.bukkit.util.Vector(0, 0, 0),
-                new org.bukkit.util.Vector(0.4, 1.0, 0.4));
+                Material.IRON_BLOCK,
+                new Vector(0.25, -0.9, 0), // Right side, down
+                new Vector(0, 0, 0),
+                new Vector(0.3, 0.9, 0.3));
         rightLeg.setParentId("body");
         golem.addPart(rightLeg);
 
         saveModel(golem);
+        System.out.println("[CustomBosses] Created golem boss model");
     }
 
     public ModelData getModel(String id) {

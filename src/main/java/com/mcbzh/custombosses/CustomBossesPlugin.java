@@ -1,5 +1,7 @@
 package com.mcbzh.custombosses;
 
+import com.mcbzh.custombosses.commands.EditorCommand;
+import com.mcbzh.custombosses.listeners.BossListener;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public class CustomBossesPlugin extends JavaPlugin {
@@ -15,21 +17,37 @@ public class CustomBossesPlugin extends JavaPlugin {
     public void onEnable() {
         instance = this;
 
+        // Initialize managers
         this.configManager = new ConfigManager(this);
         this.bossManager = new BossManager(this);
         this.editorManager = new com.mcbzh.custombosses.editor.EditorManager(this);
         this.animationManager = new com.mcbzh.custombosses.animation.AnimationManager(this);
 
-        getCommand("cb").setExecutor(new com.mcbzh.custombosses.commands.EditorCommand(this));
+        // Register commands
+        EditorCommand editorCommand = new EditorCommand(this);
+        getCommand("cb").setExecutor(editorCommand);
+        getCommand("cb").setTabCompleter(editorCommand);
+
+        // Register listeners
+        getServer().getPluginManager().registerEvents(new BossListener(this), this);
 
         getLogger().info("CustomBosses has been enabled!");
+        getLogger().info("Loaded " + configManager.getAllModels().size() + " models");
     }
 
     @Override
     public void onDisable() {
+        // Clean shutdown - despawn all bosses
         if (bossManager != null) {
             bossManager.removeAllBosses();
+            getLogger().info("Despawned all active bosses");
         }
+
+        // Clean up editor sessions
+        if (editorManager != null) {
+            editorManager.cleanupAll();
+        }
+
         getLogger().info("CustomBosses has been disabled!");
     }
 

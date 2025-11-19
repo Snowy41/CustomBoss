@@ -15,6 +15,7 @@ public class BossManager {
 
     private final CustomBossesPlugin plugin;
     private final Map<UUID, Boss> activeBosses = new ConcurrentHashMap<>();
+    private final Map<UUID, Boss> interactionToBoss = new ConcurrentHashMap<>();
     private BukkitTask tickTask;
 
     public BossManager(CustomBossesPlugin plugin) {
@@ -29,7 +30,7 @@ public class BossManager {
     public void tick() {
         activeBosses.values().removeIf(boss -> {
             if (!boss.isValid()) {
-                boss.despawn(); // Ensure cleanup
+                removeBoss(boss);
                 return true;
             }
             boss.tick();
@@ -38,14 +39,39 @@ public class BossManager {
     }
 
     public Boss spawnBoss(ModelData model, Location location) {
+        if (model == null) {
+            plugin.getLogger().warning("Attempted to spawn boss with null model!");
+            return null;
+        }
+
         CustomBoss boss = new CustomBoss(model, location);
         activeBosses.put(boss.getCore().getUniqueId(), boss);
+        interactionToBoss.put(boss.getInteraction().getUniqueId(), boss);
+
+        plugin.getLogger().info("Spawned boss: " + model.getId() + " at " + location);
         return boss;
+    }
+
+    public Boss getBossByCore(UUID coreUUID) {
+        return activeBosses.get(coreUUID);
+    }
+
+    public Boss getBossByInteraction(UUID interactionUUID) {
+        return interactionToBoss.get(interactionUUID);
+    }
+
+    public void removeBoss(Boss boss) {
+        boss.despawn();
+        activeBosses.remove(boss.getCore().getUniqueId());
+        if (boss instanceof CustomBoss) {
+            interactionToBoss.remove(((CustomBoss) boss).getInteraction().getUniqueId());
+        }
     }
 
     public void despawnAll() {
         activeBosses.values().forEach(Boss::despawn);
         activeBosses.clear();
+        interactionToBoss.clear();
     }
 
     public void removeAllBosses() {
@@ -53,5 +79,9 @@ public class BossManager {
             tickTask.cancel();
         }
         despawnAll();
+    }
+
+    public Map<UUID, Boss> getActiveBosses() {
+        return activeBosses;
     }
 }

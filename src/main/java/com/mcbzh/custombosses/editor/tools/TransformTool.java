@@ -1,19 +1,27 @@
 package com.mcbzh.custombosses.editor.tools;
 
 import com.mcbzh.custombosses.editor.EditorSession;
+import com.mcbzh.custombosses.model.ModelPart;
+import com.mcbzh.custombosses.model.ModelPartData;
 import org.bukkit.Material;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.block.Action;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.util.Vector;
 
 public class TransformTool extends EditorTool {
 
     private final TransformMode mode;
+    private Axis axis = Axis.Y;
 
     public enum TransformMode {
         MOVE, ROTATE, SCALE
+    }
+
+    public enum Axis {
+        X, Y, Z, ALL
     }
 
     public TransformTool(EditorSession session, TransformMode mode) {
@@ -31,168 +39,181 @@ public class TransformTool extends EditorTool {
 
         ItemStack item = new ItemStack(mat);
         ItemMeta meta = item.getItemMeta();
-        meta.setDisplayName("§6" + mode.name() + " Tool");
+        meta.setDisplayName("§6" + mode.name() + " Tool §7[" + axis.name() + "]");
+        meta.setLore(java.util.List.of(
+                "§7Left-Click: Decrease",
+                "§7Right-Click: Increase",
+                "§7Shift+Left: Change axis",
+                "§7Shift+Right: Enter exact value"
+        ));
         item.setItemMeta(meta);
         return item;
-    }
-
-    private Axis axis = Axis.Y;
-
-    public enum Axis {
-        X, Y, Z, ALL
     }
 
     @Override
     public void onUse(Player player, Action action) {
         Entity selected = session.getSelectedPart();
         if (selected == null) {
-            player.sendMessage("§cSelect a part first!");
+            player.sendMessage("§cNo part selected! Use the Select tool first.");
             return;
         }
 
-        // Cycle Axis with Left Click Air (if not sneaking) or maybe Swap Hands?
-        // Let's use Swap Hands event in EditorManager? No, simpler: Left Click Air
-        // cycles axis, Right Click applies +Delta, Shift+Right applies -Delta?
-        // Current: Left = -Delta, Right = +Delta.
-        // Let's keep that.
-        // How to cycle axis? Maybe Drop Item?
-        // Or just use a command / chat?
-        // Let's use Shift + Left Click to cycle axis.
-
+        // Cycle axis with Shift + Left Click
         if (player.isSneaking() && (action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK)) {
             axis = Axis.values()[(axis.ordinal() + 1) % Axis.values().length];
-            player.sendMessage("§eSelected Axis: " + axis.name());
+            player.sendMessage("§eAxis: §f" + axis.name());
+
+            // Update item display
+            player.getInventory().setItem(
+                    player.getInventory().getHeldItemSlot(),
+                    getIcon()
+            );
             return;
         }
 
-        // Precision Mode via Chat (Shift + Right Click)
+        // Precision mode with Shift + Right Click
         if (player.isSneaking() && (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK)) {
-            player.sendMessage(
-                    "§eEnter a value in chat to set " + mode.name() + " on " + axis.name() + " (or 'cancel'):");
+            player.sendMessage("§eEnter value for " + mode.name() + " " + axis.name() + ":");
+            player.sendMessage("§7Type a number in chat (e.g. '1.5' or '45')");
+
             session.setWaitingForChatInput(true, (input) -> {
                 try {
                     float value = Float.parseFloat(input);
-                    applyValue(selected, value);
-                    player.sendMessage("§aSet " + mode.name() + " " + axis.name() + " to " + value);
+                    applyValue(selected, value, player);
                 } catch (NumberFormatException e) {
-                    player.sendMessage("§cInvalid number.");
+                    player.sendMessage("§cInvalid number: " + input);
                 }
             });
             return;
         }
 
-        float delta = 0.1f;
-        if (action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK) {
-            delta = -0.1f;
-        }
+        // Normal increment/decrement
+        float delta = (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK) ? 1.0f : -1.0f;
 
-        // Apply Delta
-        applyDelta(selected, delta);
+        // Adjust delta based on mode
+        delta = switch (mode) {
+            case MOVE -> delta * 0.1f;      // 0.1 blocks per click
+            case ROTATE -> delta * 15.0f;   // 15 degrees per click
+            case SCALE -> delta * 0.1f;     // 0.1 scale per click
+        };
+
+        applyDelta(selected, delta, player);
     }
 
-    private void applyValue(Entity selected, float value) {
-        com.mcbzh.custombosses.model.ModelPart part = getPart(selected);
-        if (part == null)
-            return;
-        com.mcbzh.custombosses.model.ModelPartData data = part.getData();
+    private void applyValue(Entity selected, float value, Player player) {
+        ModelPart part = getPart(selected);
+        if (part == null) return;
 
-        // Capture old state
-        org.bukkit.util.Vector oldOffset = data.getOffset().clone();
-        org.bukkit.util.Vector oldRotation = data.getRotation().clone();
-        org.bukkit.util.Vector oldScale = data.getScale().clone();
+        ModelPartData data = part.getData();
+        Vector oldOffset = data.getOffset().clone();
+        Vector oldRotation = data.getRotation().clone();
+        Vector oldScale = data.getScale().clone();
 
         switch (mode) {
-            case MOVE:
-                if (axis == Axis.X)
-                    data.getOffset().setX(value);
-                if (axis == Axis.Y)
-                    data.getOffset().setY(value);
-                if (axis == Axis.Z)
-                    data.getOffset().setZ(value);
-                break;
-            case ROTATE:
-                if (axis == Axis.X)
-                    data.getRotation().setX(value);
-                if (axis == Axis.Y)
-                    data.getRotation().setY(value);
-                if (axis == Axis.Z)
-                    data.getRotation().setZ(value);
-                break;
-            case SCALE:
-                if (axis == Axis.ALL)
-                    data.setScale(new org.bukkit.util.Vector(value, value, value));
-                else {
-                    if (axis == Axis.X)
-                        data.getScale().setX(value);
-                    if (axis == Axis.Y)
-                        data.getScale().setY(value);
-                    if (axis == Axis.Z)
-                        data.getScale().setZ(value);
+            case MOVE -> {
+                switch (axis) {
+                    case X -> data.getOffset().setX(value);
+                    case Y -> data.getOffset().setY(value);
+                    case Z -> data.getOffset().setZ(value);
+                    case ALL -> data.setOffset(new Vector(value, value, value));
                 }
-                break;
+                player.sendMessage(String.format("§aSet position %s to %.2f", axis.name(), value));
+            }
+            case ROTATE -> {
+                switch (axis) {
+                    case X -> data.getRotation().setX(value);
+                    case Y -> data.getRotation().setY(value);
+                    case Z -> data.getRotation().setZ(value);
+                    case ALL -> data.setRotation(new Vector(value, value, value));
+                }
+                player.sendMessage(String.format("§aSet rotation %s to %.2f°", axis.name(), value));
+            }
+            case SCALE -> {
+                // Prevent zero or negative scale
+                if (value <= 0.01f) value = 0.01f;
+
+                switch (axis) {
+                    case X -> data.getScale().setX(value);
+                    case Y -> data.getScale().setY(value);
+                    case Z -> data.getScale().setZ(value);
+                    case ALL -> data.setScale(new Vector(value, value, value));
+                }
+                player.sendMessage(String.format("§aSet scale %s to %.2f", axis.name(), value));
+            }
         }
 
         recordAndUpdate(data, oldOffset, oldRotation, oldScale);
     }
 
-    private void applyDelta(Entity selected, float delta) {
-        com.mcbzh.custombosses.model.ModelPart part = getPart(selected);
-        if (part == null)
-            return;
-        com.mcbzh.custombosses.model.ModelPartData data = part.getData();
+    private void applyDelta(Entity selected, float delta, Player player) {
+        ModelPart part = getPart(selected);
+        if (part == null) return;
 
-        // Capture old state
-        org.bukkit.util.Vector oldOffset = data.getOffset().clone();
-        org.bukkit.util.Vector oldRotation = data.getRotation().clone();
-        org.bukkit.util.Vector oldScale = data.getScale().clone();
+        ModelPartData data = part.getData();
+        Vector oldOffset = data.getOffset().clone();
+        Vector oldRotation = data.getRotation().clone();
+        Vector oldScale = data.getScale().clone();
 
         switch (mode) {
-            case MOVE:
-                if (axis == Axis.X)
-                    data.setOffset(data.getOffset().add(new org.bukkit.util.Vector(delta, 0, 0)));
-                if (axis == Axis.Y)
-                    data.setOffset(data.getOffset().add(new org.bukkit.util.Vector(0, delta, 0)));
-                if (axis == Axis.Z)
-                    data.setOffset(data.getOffset().add(new org.bukkit.util.Vector(0, 0, delta)));
-                break;
-            case ROTATE:
-                float rotDelta = delta * 15; // 15 degrees per click
-                if (axis == Axis.X)
-                    data.setRotation(data.getRotation().add(new org.bukkit.util.Vector(rotDelta, 0, 0)));
-                if (axis == Axis.Y)
-                    data.setRotation(data.getRotation().add(new org.bukkit.util.Vector(0, rotDelta, 0)));
-                if (axis == Axis.Z)
-                    data.setRotation(data.getRotation().add(new org.bukkit.util.Vector(0, 0, rotDelta)));
-                break;
-            case SCALE:
-                if (axis == Axis.ALL)
-                    data.setScale(data.getScale().add(new org.bukkit.util.Vector(delta, delta, delta)));
-                else {
-                    if (axis == Axis.X)
-                        data.getScale().setX(data.getScale().getX() + delta);
-                    if (axis == Axis.Y)
-                        data.getScale().setY(data.getScale().getY() + delta);
-                    if (axis == Axis.Z)
-                        data.getScale().setZ(data.getScale().getZ() + delta);
+            case MOVE -> {
+                switch (axis) {
+                    case X -> data.getOffset().setX(data.getOffset().getX() + delta);
+                    case Y -> data.getOffset().setY(data.getOffset().getY() + delta);
+                    case Z -> data.getOffset().setZ(data.getOffset().getZ() + delta);
                 }
-                break;
+                player.sendMessage(String.format("§7%s: §f%.2f, %.2f, %.2f",
+                        mode.name(),
+                        data.getOffset().getX(),
+                        data.getOffset().getY(),
+                        data.getOffset().getZ()));
+            }
+            case ROTATE -> {
+                switch (axis) {
+                    case X -> data.getRotation().setX(data.getRotation().getX() + delta);
+                    case Y -> data.getRotation().setY(data.getRotation().getY() + delta);
+                    case Z -> data.getRotation().setZ(data.getRotation().getZ() + delta);
+                }
+                player.sendMessage(String.format("§7%s: §f%.1f°, %.1f°, %.1f°",
+                        mode.name(),
+                        data.getRotation().getX(),
+                        data.getRotation().getY(),
+                        data.getRotation().getZ()));
+            }
+            case SCALE -> {
+                switch (axis) {
+                    case X -> data.getScale().setX(Math.max(0.01, data.getScale().getX() + delta));
+                    case Y -> data.getScale().setY(Math.max(0.01, data.getScale().getY() + delta));
+                    case Z -> data.getScale().setZ(Math.max(0.01, data.getScale().getZ() + delta));
+                    case ALL -> {
+                        double newScale = Math.max(0.01, data.getScale().getX() + delta);
+                        data.setScale(new Vector(newScale, newScale, newScale));
+                    }
+                }
+                player.sendMessage(String.format("§7%s: §f%.2f, %.2f, %.2f",
+                        mode.name(),
+                        data.getScale().getX(),
+                        data.getScale().getY(),
+                        data.getScale().getZ()));
+            }
         }
 
         recordAndUpdate(data, oldOffset, oldRotation, oldScale);
     }
 
-    private void recordAndUpdate(com.mcbzh.custombosses.model.ModelPartData data, org.bukkit.util.Vector oldOffset,
-            org.bukkit.util.Vector oldRotation, org.bukkit.util.Vector oldScale) {
+    private void recordAndUpdate(ModelPartData data, Vector oldOffset, Vector oldRotation, Vector oldScale) {
         session.recordAction(new com.mcbzh.custombosses.editor.history.TransformAction(
                 data, oldOffset, oldRotation, oldScale,
                 data.getOffset(), data.getRotation(), data.getScale()));
-        session.getActiveInstance().update();
+
+        if (session.getActiveInstance() != null) {
+            session.getActiveInstance().update();
+        }
     }
 
-    private com.mcbzh.custombosses.model.ModelPart getPart(Entity entity) {
+    private ModelPart getPart(Entity entity) {
         if (session.getActiveInstance() != null) {
-            for (com.mcbzh.custombosses.model.ModelPart p : session.getActiveInstance().getParts().values()) {
-                if (p.getEntity().equals(entity)) {
+            for (ModelPart p : session.getActiveInstance().getParts().values()) {
+                if (p.getEntity() != null && p.getEntity().equals(entity)) {
                     return p;
                 }
             }
@@ -203,12 +224,14 @@ public class TransformTool extends EditorTool {
     @Override
     public void onTick() {
         Entity selected = session.getSelectedPart();
-        if (selected != null) {
-            com.mcbzh.custombosses.model.ModelPart part = getPart(selected);
+        if (selected != null && selected.isValid()) {
+            ModelPart part = getPart(selected);
             if (part != null) {
-                // We need global rotation for the gizmo
-                // For now, let's just use the entity's location and a default rotation
-                session.getGizmoManager().showGizmo(selected.getLocation(), new org.joml.Quaternionf());
+                // Show gizmo at part location
+                session.getGizmoManager().showGizmo(
+                        selected.getLocation(),
+                        new org.joml.Quaternionf()
+                );
             }
         } else {
             session.getGizmoManager().hideGizmo();
