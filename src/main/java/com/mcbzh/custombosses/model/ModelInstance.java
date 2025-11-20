@@ -1,6 +1,7 @@
 package com.mcbzh.custombosses.model;
 
 import com.mcbzh.custombosses.CustomBossesPlugin;
+import com.mcbzh.custombosses.animation.SmoothTransformSystem;
 import org.bukkit.Color;
 import org.bukkit.Location;
 import org.bukkit.NamespacedKey;
@@ -19,7 +20,8 @@ import org.joml.Vector3f;
 import java.util.*;
 
 /**
- * Enhanced ModelInstance with interpolation, optimization, and better selection
+ * Enhanced ModelInstance with smooth interpolation support
+ * Now uses SmoothTransformSystem for buttery 60fps animations
  */
 public class ModelInstance {
 
@@ -34,7 +36,11 @@ public class ModelInstance {
     // Display settings
     private boolean fullBrightness = true;
     private float viewRange = 64.0f;
-    private int interpolationDuration = 2; // ticks for smooth movement
+
+    // Interpolation mode - CRITICAL for editor vs live boss
+    private SmoothTransformSystem.InterpolationMode interpolationMode =
+            SmoothTransformSystem.InterpolationMode.NORMAL;
+    private boolean isInEditorMode = false; // When true, use INSTANT interpolation
 
     // Persistent keys
     private static NamespacedKey PART_ID_KEY;
@@ -52,6 +58,20 @@ public class ModelInstance {
         this.data = data;
         this.rootLocation = location.clone();
         this.parts = new LinkedHashMap<>();
+    }
+
+    /**
+     * Enable editor mode - disables interpolation for instant feedback
+     */
+    public void setEditorMode(boolean enabled) {
+        this.isInEditorMode = enabled;
+        if (enabled) {
+            // Force instant updates in editor
+            this.interpolationMode = SmoothTransformSystem.InterpolationMode.INSTANT;
+        } else {
+            // Restore smooth interpolation for live bosses
+            this.interpolationMode = SmoothTransformSystem.InterpolationMode.NORMAL;
+        }
     }
 
     public void spawn() {
@@ -80,7 +100,8 @@ public class ModelInstance {
     }
 
     /**
-     * Update only if dirty (performance optimization)
+     * Update with smooth interpolation
+     * Uses INSTANT mode in editor, SMOOTH mode for live bosses
      */
     public void update() {
         if (!dirty) return;
@@ -88,16 +109,39 @@ public class ModelInstance {
         // Check chunk loaded
         if (!isChunkLoaded(rootLocation)) return;
 
-        List<ModelData.PartData> ordered = getHierarchyOrder();
-        for (ModelData.PartData partData : ordered) {
-            Part part = parts.get(partData.id);
-            if (part != null) {
-                part.update(rootLocation, parts);
-            }
-        }
+        // Use smooth transform system
+        int interpolationTicks = isInEditorMode ? 0 : interpolationMode.ticks;
+        SmoothTransformSystem.updateModelSmooth(this, interpolationTicks);
 
         dirty = false;
         lastUpdateTick = System.currentTimeMillis();
+    }
+
+    /**
+     * Force instant update (useful for teleporting)
+     */
+    public void updateInstant() {
+        boolean wasInEditor = isInEditorMode;
+        setEditorMode(true);
+        update();
+        setEditorMode(wasInEditor);
+    }
+
+    /**
+     * Batch update system for animations
+     * Applies multiple part transforms at once for synchronized movement
+     */
+    public SmoothTransformSystem.BatchTransformUpdate beginBatchUpdate() {
+        SmoothTransformSystem.BatchTransformUpdate batch =
+                new SmoothTransformSystem.BatchTransformUpdate(this);
+
+        if (isInEditorMode) {
+            batch.setInterpolation(SmoothTransformSystem.InterpolationMode.INSTANT);
+        } else {
+            batch.setInterpolation(interpolationMode);
+        }
+
+        return batch;
     }
 
     public void setRootLocation(Location location) {
@@ -120,15 +164,29 @@ public class ModelInstance {
     }
 
     /**
-     * Set interpolation duration for smooth animations
+     * Get parts in hierarchy order (parents before children)
+     * Used by SmoothTransformSystem
      */
-    public void setInterpolationDuration(int ticks) {
-        this.interpolationDuration = ticks;
-        parts.values().forEach(part -> {
-            if (part.entity != null) {
-                part.entity.setInterpolationDuration(ticks);
+    public List<Part> getHierarchyOrderedParts() {
+        List<ModelData.PartData> orderedData = getHierarchyOrder();
+        List<Part> orderedParts = new ArrayList<>();
+
+        for (ModelData.PartData data : orderedData) {
+            Part part = parts.get(data.id);
+            if (part != null) {
+                orderedParts.add(part);
             }
-        });
+        }
+
+        return orderedParts;
+    }
+
+    /**
+     * Set interpolation mode for animations
+     */
+    public void setInterpolationMode(SmoothTransformSystem.InterpolationMode mode) {
+        if (isInEditorMode) return; // Don't override editor mode
+        this.interpolationMode = mode;
     }
 
     /**
@@ -250,7 +308,7 @@ public class ModelInstance {
     }
 
     /**
-     * Enhanced Part class with better display entity control
+     * Enhanced Part class with smooth interpolation support
      */
     public class Part {
         private final ModelData.PartData data;
@@ -273,7 +331,8 @@ public class ModelInstance {
             entity.setBlock(data.material.createBlockData());
 
             // Enhanced display properties
-            entity.setInterpolationDuration(interpolationDuration);
+            // Start with 0 interpolation, will be set during updates
+            entity.setInterpolationDuration(0);
             entity.setTeleportDuration(1);
             entity.setViewRange(viewRange);
 
@@ -285,7 +344,7 @@ public class ModelInstance {
             entity.setDisplayWidth(2.0f);
             entity.setDisplayHeight(2.0f);
 
-            // Optional: Remove shadow for floating models
+            // Remove shadow for floating models
             entity.setShadowRadius(0.0f);
             entity.setShadowStrength(0.0f);
 
@@ -300,57 +359,6 @@ public class ModelInstance {
             if (entity != null) {
                 entity.remove();
                 entity = null;
-            }
-        }
-
-        public void update(Location root, Map<String, Part> allParts) {
-            if (entity == null || !entity.isValid()) return;
-            if (!isChunkLoaded(root)) return;
-
-            // Calculate global matrix
-            globalMatrix.identity();
-
-            // Apply parent transform
-            if (data.parentId != null) {
-                Part parent = allParts.get(data.parentId);
-                if (parent != null) {
-                    globalMatrix.set(parent.globalMatrix);
-                }
-            }
-
-            // Apply local transform
-            globalMatrix.translate(
-                    (float) data.position.getX(),
-                    (float) data.position.getY(),
-                    (float) data.position.getZ()
-            );
-
-            globalMatrix.rotateXYZ(
-                    (float) Math.toRadians(data.rotation.getX()),
-                    (float) Math.toRadians(data.rotation.getY()),
-                    (float) Math.toRadians(data.rotation.getZ())
-            );
-
-            globalMatrix.scale(
-                    (float) data.scale.getX(),
-                    (float) data.scale.getY(),
-                    (float) data.scale.getZ()
-            );
-
-            // Apply to entity
-            entity.teleport(root);
-
-            Vector3f translation = globalMatrix.getTranslation(new Vector3f());
-            Quaternionf rotation = globalMatrix.getUnnormalizedRotation(new Quaternionf());
-            Vector3f scale = globalMatrix.getScale(new Vector3f());
-
-            entity.setTransformation(new Transformation(
-                    translation, rotation, scale, new Quaternionf()
-            ));
-
-            // Update visibility
-            if (hidden && entity.isGlowing()) {
-                entity.setGlowing(false);
             }
         }
 

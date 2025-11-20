@@ -9,12 +9,16 @@ import org.bukkit.entity.BlockDisplay;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.util.RayTraceResult;
 import org.bukkit.util.Vector;
 
 import java.util.*;
 import java.util.function.Consumer;
 
+/**
+ * Updated EditorSession with smooth interpolation awareness
+ * CRITICAL: Editor mode ALWAYS uses instant updates (no interpolation)
+ * This ensures immediate visual feedback when moving parts
+ */
 public class EditorSession {
 
     private final Player player;
@@ -79,6 +83,10 @@ public class EditorSession {
         spawnRootMarker();
 
         currentInstance = new ModelInstance(currentModel, fixedRootLocation);
+
+        // *** CRITICAL: Enable editor mode for instant updates ***
+        currentInstance.setEditorMode(true);
+
         currentInstance.spawn();
 
         active = true;
@@ -99,6 +107,7 @@ public class EditorSession {
         player.sendMessage("§7Parts: " + currentModel.getParts().size());
         player.sendMessage("§7Root at: " + String.format("%.1f, %.1f, %.1f",
                 fixedRootLocation.getX(), fixedRootLocation.getY(), fixedRootLocation.getZ()));
+        player.sendMessage("§a§lEditor Mode: §fInstant updates enabled");
         player.sendMessage("§e§lTransform Controls:");
         player.sendMessage("§7- Left-Click: Apply transform");
         player.sendMessage("§7- Right-Click: Toggle axis (X/Y/Z/All)");
@@ -260,7 +269,10 @@ public class EditorSession {
             }
         }
 
-        currentInstance.update();
+        // Update with instant feedback (editor mode is already enabled)
+        currentInstance.markDirty();
+        currentInstance.update(); // Will use instant mode automatically
+
         refreshSelection(); // Update selection to new position
         recordAction(new TransformAction(data, oldPos, oldRot, oldScale));
     }
@@ -312,6 +324,8 @@ public class EditorSession {
             }
         }
 
+        // Instant update in editor mode
+        currentInstance.markDirty();
         currentInstance.update();
         refreshSelection();
         recordAction(new TransformAction(data, oldPos, oldRot, oldScale));
@@ -352,8 +366,10 @@ public class EditorSession {
         newPart.position = offset;
         currentModel.addPart(newPart);
 
+        // Respawn entire model with instant updates
         currentInstance.despawn();
         currentInstance = new ModelInstance(currentModel, fixedRootLocation);
+        currentInstance.setEditorMode(true); // Maintain editor mode
         currentInstance.spawn();
 
         player.sendMessage("§aSpawned: " + id);
@@ -450,8 +466,11 @@ public class EditorSession {
         }
 
         currentModel.removePart(selectedPartId);
+
+        // Respawn model
         currentInstance.despawn();
         currentInstance = new ModelInstance(currentModel, fixedRootLocation);
+        currentInstance.setEditorMode(true); // Maintain editor mode
         currentInstance.spawn();
 
         selectedPart = null;
@@ -464,6 +483,9 @@ public class EditorSession {
             EditorAction action = undoStack.pop();
             action.undo();
             redoStack.push(action);
+
+            // Instant update
+            currentInstance.markDirty();
             currentInstance.update();
             refreshSelection();
             player.sendMessage("§eUndid action");
@@ -475,6 +497,9 @@ public class EditorSession {
             EditorAction action = redoStack.pop();
             action.redo();
             undoStack.push(action);
+
+            // Instant update
+            currentInstance.markDirty();
             currentInstance.update();
             refreshSelection();
             player.sendMessage("§eRedid action");
@@ -491,7 +516,7 @@ public class EditorSession {
             selectedPart.setGlowing(true);
         }
 
-        // Crosshair movement
+        // Crosshair movement with instant updates
         if (crosshairMoveMode && selectedPartId != null && currentInstance != null && fixedRootLocation != null) {
             updateCrosshairMovement();
         }
@@ -528,6 +553,9 @@ public class EditorSession {
         Vector newOffset = targetLoc.toVector().subtract(fixedRootLocation.toVector());
 
         part.getData().position = newOffset;
+
+        // Instant update for smooth crosshair following
+        currentInstance.markDirty();
         currentInstance.update();
         refreshSelection();
     }
