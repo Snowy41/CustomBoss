@@ -218,7 +218,7 @@ public class ModelInstance {
     }
 
     /**
-     * Raycast to select a part - much more accurate than distance checking
+     * Raycast to select a part - much more accurate
      */
     public Part raycastPart(Location eyeLocation, Vector direction, double maxDistance) {
         Part closestPart = null;
@@ -229,20 +229,29 @@ public class ModelInstance {
 
             Location partLoc = part.entity.getLocation();
 
-            // Create bounding box for part (approximate)
-            Vector3f scale = part.data.scale.toVector3f();
+            // Get actual scale from transformation
+            Vector scale = part.data.scale;
+
+            // Create bounding box centered on part location
+            double halfX = Math.abs(scale.getX()) / 2.0;
+            double halfY = Math.abs(scale.getY()) / 2.0;
+            double halfZ = Math.abs(scale.getZ()) / 2.0;
+
             BoundingBox box = new BoundingBox(
-                    partLoc.getX() - scale.x() / 2,
-                    partLoc.getY() - scale.y() / 2,
-                    partLoc.getZ() - scale.z() / 2,
-                    partLoc.getX() + scale.x() / 2,
-                    partLoc.getY() + scale.y() / 2,
-                    partLoc.getZ() + scale.z() / 2
+                    partLoc.getX() - halfX,
+                    partLoc.getY() - halfY,
+                    partLoc.getZ() - halfZ,
+                    partLoc.getX() + halfX,
+                    partLoc.getY() + halfY,
+                    partLoc.getZ() + halfZ
             );
+
+            // Expand box slightly to make selection easier
+            box.expand(0.1);
 
             RayTraceResult result = box.rayTrace(eyeLocation.toVector(), direction, maxDistance);
             if (result != null) {
-                double distance = eyeLocation.distance(result.getHitPosition().toLocation(eyeLocation.getWorld()));
+                double distance = eyeLocation.toVector().distance(result.getHitPosition());
                 if (distance < closestDistance) {
                     closestDistance = distance;
                     closestPart = part;

@@ -14,6 +14,8 @@ import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
 
+import java.util.List;
+
 public class EditorListener implements Listener {
 
     private final CustomBossesPlugin plugin;
@@ -36,14 +38,15 @@ public class EditorListener implements Listener {
         if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND) return;
 
         ItemStack item = player.getInventory().getItemInMainHand();
-        if (item == null || !item.hasItemMeta()) return;
+        if (item == null || !item.hasItemMeta() || !item.getItemMeta().hasLore()) return;
 
-        String lore = item.getItemMeta().hasLore() ?
-                item.getItemMeta().getLore().get(0) : "";
+        List<String> lore = item.getItemMeta().getLore();
+        if (lore == null || lore.isEmpty()) return;
 
-        if (lore.startsWith("§8tool:")) {
+        String loreText = lore.get(0);
+        if (loreText.startsWith("§8tool:")) {
             event.setCancelled(true);
-            String tool = lore.substring(7);
+            String tool = loreText.substring(7);
             boolean rightClick = event.getAction() == Action.RIGHT_CLICK_AIR ||
                     event.getAction() == Action.RIGHT_CLICK_BLOCK;
             session.handleToolUse(tool, rightClick);

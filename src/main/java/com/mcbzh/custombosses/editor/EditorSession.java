@@ -148,7 +148,12 @@ public class EditorSession {
     }
 
     public void handleToolUse(String tool, boolean rightClick) {
-        if (!active || currentInstance == null) return;
+        if (!active || currentInstance == null) {
+            player.sendMessage("§cEditor not active!");
+            return;
+        }
+
+        player.sendMessage("§7Tool: " + tool + " | Right: " + rightClick); // Debug
 
         switch (tool) {
             case "spawn" -> handleSpawn();
@@ -161,6 +166,7 @@ public class EditorSession {
                         toggleCrosshairMode();
                     } else {
                         currentTransformMode = TransformMode.MOVE;
+                        player.sendMessage("§6§lMove Mode Active");
                         handleTransformClick();
                     }
                 }
@@ -170,6 +176,7 @@ public class EditorSession {
                     cycleAxis();
                 } else {
                     currentTransformMode = TransformMode.ROTATE;
+                    player.sendMessage("§6§lRotate Mode Active");
                     handleTransformClick();
                 }
             }
@@ -178,6 +185,7 @@ public class EditorSession {
                     cycleAxis();
                 } else {
                     currentTransformMode = TransformMode.SCALE;
+                    player.sendMessage("§6§lScale Mode Active");
                     handleTransformClick();
                 }
             }
@@ -188,6 +196,7 @@ public class EditorSession {
                 exit();
                 openHub();
             }
+            default -> player.sendMessage("§cUnknown tool: " + tool);
         }
     }
 
@@ -356,25 +365,43 @@ public class EditorSession {
     }
 
     private void handleSpawn() {
-        if (fixedRootLocation == null || currentModel == null || currentInstance == null) return;
+        if (fixedRootLocation == null || currentModel == null || currentInstance == null) {
+            player.sendMessage("§cEditor not properly initialized!");
+            return;
+        }
 
         String id = "part_" + System.currentTimeMillis();
 
+        // Spawn part where player is looking
         Location eyeLoc = player.getEyeLocation();
         Location targetLoc = eyeLoc.clone().add(eyeLoc.getDirection().multiply(3.0));
+
+        // Calculate offset from root (this is LOCAL position)
         Vector offset = targetLoc.toVector().subtract(fixedRootLocation.toVector());
 
         ModelData.PartData newPart = new ModelData.PartData(id);
         newPart.position = offset;
+        newPart.material = Material.WHITE_CONCRETE; // Default material
+        newPart.scale = new Vector(0.5, 0.5, 0.5); // Smaller default size
         currentModel.addPart(newPart);
 
-        // Respawn entire model with instant updates
+        // Despawn and respawn to include new part
         currentInstance.despawn();
         currentInstance = new ModelInstance(currentModel, fixedRootLocation);
-        currentInstance.setEditorMode(true); // Maintain editor mode
+        currentInstance.setEditorMode(true);
         currentInstance.spawn();
 
         player.sendMessage("§aSpawned: " + id);
+        player.sendMessage("§7Position: " + formatVector(offset));
+
+        // Auto-select new part
+        selectedPartId = id;
+        ModelInstance.Part part = currentInstance.getParts().get(id);
+        if (part != null && part.getEntity() != null) {
+            selectedPart = part.getEntity();
+            selectedPart.setGlowing(true);
+            updateGizmo();
+        }
     }
 
     private void handleSelect() {
@@ -383,50 +410,44 @@ public class EditorSession {
             return;
         }
 
-        // Raycast to find BlockDisplay
-        Location eyeLoc = player.getEyeLocation();
-        Vector direction = eyeLoc.getDirection();
-
-        BlockDisplay closest = null;
-        String closestId = null;
-        double closestDist = Double.MAX_VALUE;
-
-        for (Map.Entry<String, ModelInstance.Part> entry : currentInstance.getParts().entrySet()) {
-            BlockDisplay entity = entry.getValue().getEntity();
-            if (entity == null || !entity.isValid()) continue;
-
-            Location partLoc = entity.getLocation();
-            double dist = eyeLoc.distance(partLoc);
-
-            if (dist > 10) continue;
-
-            Vector toEntity = partLoc.toVector().subtract(eyeLoc.toVector()).normalize();
-            double dot = toEntity.dot(direction);
-
-            if (dot > 0.85 && dist < closestDist) {
-                closest = entity;
-                closestId = entry.getKey();
-                closestDist = dist;
-            }
-        }
-
-        // Deselect old
+        // Deselect old part first
         if (selectedPart != null && selectedPart.isValid()) {
             selectedPart.setGlowing(false);
         }
 
-        if (closest != null) {
-            selectedPart = closest;
-            selectedPartId = closestId;
+        // Use improved raycast from ModelInstance
+        Location eyeLoc = player.getEyeLocation();
+        Vector direction = eyeLoc.getDirection();
+
+        ModelInstance.Part hitPart = currentInstance.raycastPart(eyeLoc, direction, 10.0);
+
+        if (hitPart != null && hitPart.getEntity() != null && hitPart.getEntity().isValid()) {
+            selectedPart = hitPart.getEntity();
+            selectedPartId = hitPart.getId();
             selectedPart.setGlowing(true);
-            player.sendMessage("§aSelected: " + closestId);
+
+            // Show detailed info
+            ModelData.PartData data = hitPart.getData();
+            player.sendMessage("§a§lSelected: " + selectedPartId);
+            player.sendMessage("§7Position: §f" + formatVector(data.position));
+            player.sendMessage("§7Rotation: §f" + formatVector(data.rotation));
+            player.sendMessage("§7Scale: §f" + formatVector(data.scale));
+            if (data.parentId != null) {
+                player.sendMessage("§7Parent: §f" + data.parentId);
+            }
+
             updateGizmo();
         } else {
+            // Deselect
             selectedPart = null;
             selectedPartId = null;
+            gizmoManager.hideGizmo();
             player.sendMessage("§7Deselected");
-            updateGizmo();
         }
+    }
+
+    private String formatVector(Vector v) {
+        return String.format("%.2f, %.2f, %.2f", v.getX(), v.getY(), v.getZ());
     }
 
     private void refreshSelection() {
@@ -651,18 +672,38 @@ public class EditorSession {
 
 
     private void updateGizmo() {
-        if (selectedPart != null && selectedPart.isValid() && currentInstance != null && selectedPartId != null) {
-            ModelInstance.Part part = currentInstance.getParts().get(selectedPartId);
-            if (part != null) {
-                Vector rot = part.getData().rotation;
-                org.joml.Quaternionf rotation = new org.joml.Quaternionf()
-                        .rotateXYZ(
-                                (float) Math.toRadians(rot.getX()),
-                                (float) Math.toRadians(rot.getY()),
-                                (float) Math.toRadians(rot.getZ())
-                        );
-                gizmoManager.showGizmo(selectedPart.getLocation(), rotation);
-            }
+        if (selectedPart == null || !selectedPart.isValid()) {
+            gizmoManager.hideGizmo();
+            return;
         }
+
+        if (currentInstance == null || selectedPartId == null) {
+            gizmoManager.hideGizmo();
+            return;
+        }
+
+        ModelInstance.Part part = currentInstance.getParts().get(selectedPartId);
+        if (part == null) {
+            gizmoManager.hideGizmo();
+            return;
+        }
+
+        // Get the actual world location of the part
+        Location partLoc = selectedPart.getLocation();
+
+        // Get rotation for gizmo alignment
+        Vector rot = part.getData().rotation;
+        org.joml.Quaternionf rotation = new org.joml.Quaternionf()
+                .rotateXYZ(
+                        (float) Math.toRadians(rot.getX()),
+                        (float) Math.toRadians(rot.getY()),
+                        (float) Math.toRadians(rot.getZ())
+                );
+
+        gizmoManager.showGizmo(partLoc, rotation);
+
+        // Debug message
+        player.sendMessage("§8[Debug] Gizmo updated at: " +
+                String.format("%.2f, %.2f, %.2f", partLoc.getX(), partLoc.getY(), partLoc.getZ()));
     }
 }
