@@ -1,5 +1,9 @@
 package com.mcbzh.custombosses.boss;
 
+import com.mcbzh.custombosses.abilities.AbilityManager;
+import com.mcbzh.custombosses.abilities.BossAbility;
+import com.mcbzh.custombosses.animation.AnimationStateMachine;
+import com.mcbzh.custombosses.animation.AnimationSystem;
 import com.mcbzh.custombosses.animation.SmoothTransformSystem;
 import com.mcbzh.custombosses.model.ModelData;
 import com.mcbzh.custombosses.model.ModelInstance;
@@ -9,11 +13,15 @@ import org.bukkit.entity.*;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 
+import java.util.Comparator;
+import java.util.List;
 import java.util.UUID;
 
 /**
- * CustomBoss with smooth interpolation for fluid 60fps animations
- * Unlike editor mode, live bosses use smooth interpolation for natural movement
+ * CustomBoss - NOW WITH PHASE 1 IMPROVEMENTS:
+ * - Fixed hierarchical transformations
+ * - Animation state machine
+ * - Ability system
  */
 public class CustomBoss {
 
@@ -23,9 +31,18 @@ public class CustomBoss {
     private final LivingEntity coreEntity;
     private final Interaction hitbox;
 
+    // PHASE 1 ADDITIONS
+    private final AnimationStateMachine stateMachine;
+    private final AbilityManager abilityManager;
+    private int ticksLived = 0;
+
     // Movement tracking for adaptive interpolation
     private Location lastLocation;
     private int ticksSinceLastMove = 0;
+
+    // Target tracking
+    private LivingEntity currentTarget;
+    private int ticksSinceTargetCheck = 0;
 
     public CustomBoss(ModelData data, Location location) {
         this.uuid = UUID.randomUUID();
@@ -59,21 +76,85 @@ public class CustomBoss {
 
         // Spawn visual model
         this.modelInstance = new ModelInstance(data, location);
-
-        // *** CRITICAL: Live bosses use SMOOTH mode (not editor mode) ***
         modelInstance.setEditorMode(false);
         modelInstance.setInterpolationMode(SmoothTransformSystem.InterpolationMode.NORMAL);
-
         modelInstance.spawn();
+
+        // PHASE 1: Initialize animation state machine
+        this.stateMachine = new AnimationStateMachine(modelInstance);
+        setupDefaultAnimations();
+
+        // PHASE 1: Initialize ability manager
+        this.abilityManager = new AbilityManager(this);
+        abilityManager.startAbilityLoop(20); // Check every second
     }
 
+    /**
+     * Setup default animation states
+     * Override this or load from config for custom animations
+     */
+    private void setupDefaultAnimations() {
+        // Create placeholder animations
+        // In production, these would be loaded from JSON files
+
+        AnimationSystem.Animation idleAnim = new AnimationSystem.Animation("idle", modelData.getId());
+        idleAnim.loop = true;
+        idleAnim.duration = 40; // 2 seconds
+        // Add keyframes here
+
+        AnimationSystem.Animation walkAnim = new AnimationSystem.Animation("walk", modelData.getId());
+        walkAnim.loop = true;
+        walkAnim.duration = 20; // 1 second
+
+        AnimationSystem.Animation attackAnim = new AnimationSystem.Animation("attack", modelData.getId());
+        attackAnim.loop = false;
+        attackAnim.duration = 30; // 1.5 seconds
+
+        // Register animations
+        stateMachine.registerAnimation(AnimationStateMachine.AnimationState.IDLE, idleAnim);
+        stateMachine.registerAnimation(AnimationStateMachine.AnimationState.WALK, walkAnim);
+        stateMachine.registerAnimation(AnimationStateMachine.AnimationState.ATTACK, attackAnim);
+
+        // Set transition times
+        stateMachine.setTransitionTime(
+                AnimationStateMachine.AnimationState.IDLE,
+                AnimationStateMachine.AnimationState.WALK,
+                0.2f
+        );
+        stateMachine.setTransitionTime(
+                AnimationStateMachine.AnimationState.WALK,
+                AnimationStateMachine.AnimationState.ATTACK,
+                0.1f
+        );
+    }
+
+    /**
+     * Register an ability for this boss
+     */
+    public void registerAbility(BossAbility ability) {
+        abilityManager.registerAbility(ability);
+    }
+
+    /**
+     * Main tick method - now with animation state management
+     */
     public void tick() {
         if (!isValid()) return;
 
+        ticksLived++;
         Location coreLoc = coreEntity.getLocation();
 
         // Sync hitbox to core (instant, no interpolation needed)
         hitbox.teleport(coreLoc);
+
+        // Update target
+        updateTarget();
+
+        // PHASE 1: Update animation state machine
+        if (stateMachine != null) {
+            stateMachine.autoUpdate(coreEntity);
+            stateMachine.tick();
+        }
 
         // Check if boss moved
         boolean hasMoved = !coreLoc.getWorld().equals(lastLocation.getWorld()) ||
@@ -111,29 +192,74 @@ public class CustomBoss {
     }
 
     /**
-     * Apply animation to boss
-     * Uses batch update system for synchronized part movement
+     * Find and track nearest player as target
      */
-    public void applyAnimation(String animationId) {
-        // This would be called by your AnimationSystem
-        // The batch update ensures all parts move together smoothly
+    private void updateTarget() {
+        ticksSinceTargetCheck++;
 
-        SmoothTransformSystem.BatchTransformUpdate batch = modelInstance.beginBatchUpdate();
+        // Check for new target every 20 ticks
+        if (ticksSinceTargetCheck < 20) return;
+        ticksSinceTargetCheck = 0;
 
-        // Example: Apply animation transforms to parts
-        // batch.updatePart("arm_left", newPos, newRot, newScale);
-        // batch.updatePart("arm_right", newPos, newRot, newScale);
+        // Find nearest player within range
+        List<Entity> nearby = coreEntity.getNearbyEntities(32, 32, 32);
+        Player nearest = null;
+        double nearestDist = Double.MAX_VALUE;
 
-        batch.apply(); // All parts update together with smooth interpolation
+        for (Entity entity : nearby) {
+            if (!(entity instanceof Player player)) continue;
+            if (player.getGameMode() == org.bukkit.GameMode.CREATIVE) continue;
+            if (player.getGameMode() == org.bukkit.GameMode.SPECTATOR) continue;
+
+            double dist = player.getLocation().distance(coreEntity.getLocation());
+            if (dist < nearestDist) {
+                nearest = player;
+                nearestDist = dist;
+            }
+        }
+
+        if (nearest != null) {
+            currentTarget = nearest;
+
+            // Make zombie target this player
+            if (coreEntity instanceof Mob mob) {
+                mob.setTarget(nearest);
+            }
+        }
+    }
+
+    /**
+     * Trigger a specific ability by ID
+     */
+    public boolean useAbility(String abilityId) {
+        if (currentTarget == null) return false;
+        return abilityManager.useAbility(abilityId, currentTarget);
+    }
+
+    /**
+     * Play a specific animation state
+     */
+    public void playAnimation(AnimationStateMachine.AnimationState state) {
+        if (stateMachine != null) {
+            stateMachine.transitionTo(state);
+        }
     }
 
     public void damage(double amount) {
         if (coreEntity != null && coreEntity.isValid()) {
             coreEntity.damage(amount);
+
+            // Trigger hurt animation
+            if (stateMachine != null) {
+                stateMachine.playOneShot(AnimationStateMachine.AnimationState.HURT, null);
+            }
         }
     }
 
     public void despawn() {
+        if (abilityManager != null) {
+            abilityManager.stop();
+        }
         if (coreEntity != null) coreEntity.remove();
         if (hitbox != null) hitbox.remove();
         if (modelInstance != null) modelInstance.despawn();
@@ -144,9 +270,14 @@ public class CustomBoss {
                 hitbox != null && hitbox.isValid();
     }
 
+    // Getters
     public UUID getUUID() { return uuid; }
     public LivingEntity getCoreEntity() { return coreEntity; }
     public Interaction getHitbox() { return hitbox; }
     public ModelInstance getModelInstance() { return modelInstance; }
     public ModelData getModelData() { return modelData; }
+    public AnimationStateMachine getStateMachine() { return stateMachine; }
+    public AbilityManager getAbilityManager() { return abilityManager; }
+    public int getTicksLived() { return ticksLived; }
+    public LivingEntity getTarget() { return currentTarget; }
 }
