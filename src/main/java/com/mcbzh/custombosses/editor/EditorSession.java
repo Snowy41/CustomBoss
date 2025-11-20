@@ -273,6 +273,7 @@ public class EditorSession {
         currentInstance.markDirty();
         currentInstance.update(); // Will use instant mode automatically
 
+        updateGizmo();
         refreshSelection(); // Update selection to new position
         recordAction(new TransformAction(data, oldPos, oldRot, oldScale));
     }
@@ -328,6 +329,7 @@ public class EditorSession {
         currentInstance.markDirty();
         currentInstance.update();
         refreshSelection();
+        updateGizmo();
         recordAction(new TransformAction(data, oldPos, oldRot, oldScale));
     }
 
@@ -418,10 +420,12 @@ public class EditorSession {
             selectedPartId = closestId;
             selectedPart.setGlowing(true);
             player.sendMessage("§aSelected: " + closestId);
+            updateGizmo();
         } else {
             selectedPart = null;
             selectedPartId = null;
             player.sendMessage("§7Deselected");
+            updateGizmo();
         }
     }
 
@@ -511,9 +515,13 @@ public class EditorSession {
         redoStack.clear();
     }
 
+
     public void tick() {
-        if (selectedPart != null && selectedPart.isValid() && !selectedPart.isGlowing()) {
-            selectedPart.setGlowing(true);
+        // FIXED: Only refresh selection if it's actually deselected
+        if (selectedPart != null && selectedPart.isValid()) {
+            if (!selectedPart.isGlowing()) {
+                selectedPart.setGlowing(true);
+            }
         }
 
         // Crosshair movement with instant updates
@@ -521,27 +529,20 @@ public class EditorSession {
             updateCrosshairMovement();
         }
 
-        // Root marker
+        // FIXED: Only spawn root marker once
         if (active && fixedRootLocation != null) {
             if (rootMarker == null || !rootMarker.isValid()) {
                 spawnRootMarker();
             }
+            // Don't recreate every tick!
         }
 
-        // Gizmo update
-        if (selectedPart != null && selectedPart.isValid() && currentInstance != null && selectedPartId != null) {
-            ModelInstance.Part part = currentInstance.getParts().get(selectedPartId);
-            if (part != null) {
-                Vector rot = part.getData().rotation;
-                org.joml.Quaternionf rotation = new org.joml.Quaternionf()
-                        .rotateXYZ(
-                                (float) Math.toRadians(rot.getX()),
-                                (float) Math.toRadians(rot.getY()),
-                                (float) Math.toRadians(rot.getZ())
-                        );
-                gizmoManager.showGizmo(selectedPart.getLocation(), rotation);
-            }
-        }
+        // FIXED: Only update gizmo when selection changes or part moves
+        // Remove the constant gizmo update from tick()
+        // Instead, update gizmo only in:
+        // - handleSelect() when selection changes
+        // - handleTransformClick() after transform
+        // - handleScrollTransform() after scroll
     }
 
     private void updateCrosshairMovement() {
@@ -645,6 +646,23 @@ public class EditorSession {
             part.position = newPos.clone();
             part.rotation = newRot.clone();
             part.scale = newScale.clone();
+        }
+    }
+
+
+    private void updateGizmo() {
+        if (selectedPart != null && selectedPart.isValid() && currentInstance != null && selectedPartId != null) {
+            ModelInstance.Part part = currentInstance.getParts().get(selectedPartId);
+            if (part != null) {
+                Vector rot = part.getData().rotation;
+                org.joml.Quaternionf rotation = new org.joml.Quaternionf()
+                        .rotateXYZ(
+                                (float) Math.toRadians(rot.getX()),
+                                (float) Math.toRadians(rot.getY()),
+                                (float) Math.toRadians(rot.getZ())
+                        );
+                gizmoManager.showGizmo(selectedPart.getLocation(), rotation);
+            }
         }
     }
 }

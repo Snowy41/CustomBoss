@@ -13,15 +13,14 @@ import org.bukkit.entity.*;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 
-import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * CustomBoss - NOW WITH PHASE 1 IMPROVEMENTS:
- * - Fixed hierarchical transformations
- * - Animation state machine
- * - Ability system
+ * CustomBoss - FIXED VERSION
+ * - Model now follows zombie movement properly
+ * - Hitbox syncs position AND rotation
+ * - Ability manager starts after abilities registered
  */
 public class CustomBoss {
 
@@ -31,18 +30,21 @@ public class CustomBoss {
     private final LivingEntity coreEntity;
     private final Interaction hitbox;
 
-    // PHASE 1 ADDITIONS
     private final AnimationStateMachine stateMachine;
     private final AbilityManager abilityManager;
     private int ticksLived = 0;
 
-    // Movement tracking for adaptive interpolation
+    // Movement tracking - FIXED: Better threshold and proper update tracking
     private Location lastLocation;
     private int ticksSinceLastMove = 0;
+    private static final double MOVEMENT_THRESHOLD = 0.01; // ~0.1 blocks
 
     // Target tracking
     private LivingEntity currentTarget;
     private int ticksSinceTargetCheck = 0;
+
+    // Ability loop control
+    private boolean abilitiesRegistered = false;
 
     public CustomBoss(ModelData data, Location location) {
         this.uuid = UUID.randomUUID();
@@ -63,10 +65,8 @@ public class CustomBoss {
         coreEntity.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(100.0);
         coreEntity.setHealth(100.0);
 
-        // Add slowness to reduce jitter
-        coreEntity.addPotionEffect(new PotionEffect(
-                PotionEffectType.SLOWNESS, Integer.MAX_VALUE, 0, false, false
-        ));
+        // Add slowness to reduce jitter - REMOVED: This was preventing movement!
+        // Instead, we'll rely on proper sync logic
 
         // Spawn hitbox
         this.hitbox = (Interaction) location.getWorld().spawnEntity(location, EntityType.INTERACTION);
@@ -80,42 +80,34 @@ public class CustomBoss {
         modelInstance.setInterpolationMode(SmoothTransformSystem.InterpolationMode.NORMAL);
         modelInstance.spawn();
 
-        // PHASE 1: Initialize animation state machine
+        // Initialize animation state machine
         this.stateMachine = new AnimationStateMachine(modelInstance);
         setupDefaultAnimations();
 
-        // PHASE 1: Initialize ability manager
+        // Initialize ability manager (but DON'T start loop yet)
         this.abilityManager = new AbilityManager(this);
-        abilityManager.startAbilityLoop(20); // Check every second
     }
 
     /**
      * Setup default animation states
-     * Override this or load from config for custom animations
      */
     private void setupDefaultAnimations() {
-        // Create placeholder animations
-        // In production, these would be loaded from JSON files
-
         AnimationSystem.Animation idleAnim = new AnimationSystem.Animation("idle", modelData.getId());
         idleAnim.loop = true;
-        idleAnim.duration = 40; // 2 seconds
-        // Add keyframes here
+        idleAnim.duration = 40;
 
         AnimationSystem.Animation walkAnim = new AnimationSystem.Animation("walk", modelData.getId());
         walkAnim.loop = true;
-        walkAnim.duration = 20; // 1 second
+        walkAnim.duration = 20;
 
         AnimationSystem.Animation attackAnim = new AnimationSystem.Animation("attack", modelData.getId());
         attackAnim.loop = false;
-        attackAnim.duration = 30; // 1.5 seconds
+        attackAnim.duration = 30;
 
-        // Register animations
         stateMachine.registerAnimation(AnimationStateMachine.AnimationState.IDLE, idleAnim);
         stateMachine.registerAnimation(AnimationStateMachine.AnimationState.WALK, walkAnim);
         stateMachine.registerAnimation(AnimationStateMachine.AnimationState.ATTACK, attackAnim);
 
-        // Set transition times
         stateMachine.setTransitionTime(
                 AnimationStateMachine.AnimationState.IDLE,
                 AnimationStateMachine.AnimationState.WALK,
@@ -136,7 +128,17 @@ public class CustomBoss {
     }
 
     /**
-     * Main tick method - now with animation state management
+     * Start ability system (call AFTER registering abilities)
+     */
+    public void startAbilities() {
+        if (!abilitiesRegistered) {
+            abilityManager.startAbilityLoop(20);
+            abilitiesRegistered = true;
+        }
+    }
+
+    /**
+     * Main tick method - FIXED VERSION
      */
     public void tick() {
         if (!isValid()) return;
@@ -144,38 +146,38 @@ public class CustomBoss {
         ticksLived++;
         Location coreLoc = coreEntity.getLocation();
 
-        // Sync hitbox to core (instant, no interpolation needed)
+        // FIXED: Sync hitbox to core with BOTH position and rotation
         hitbox.teleport(coreLoc);
 
         // Update target
         updateTarget();
 
-        // PHASE 1: Update animation state machine
+        // Update animation state machine
         if (stateMachine != null) {
             stateMachine.autoUpdate(coreEntity);
             stateMachine.tick();
         }
 
-        // Check if boss moved
-        boolean hasMoved = !coreLoc.getWorld().equals(lastLocation.getWorld()) ||
-                coreLoc.distanceSquared(lastLocation) > 0.001;
+        // FIXED: Better movement detection and model sync
+        boolean hasMoved = hasCoreMoved(coreLoc);
 
         if (hasMoved) {
-            // Adaptive interpolation based on movement speed
+            // Update model root location FIRST
+            modelInstance.setRootLocation(coreLoc);
+
+            // Then calculate distance to determine interpolation speed
             double distance = coreLoc.distance(lastLocation);
 
-            if (distance > 2.0) {
-                // Large teleport - use instant update
+            if (distance > 5.0) {
+                // Teleport - use instant update
                 modelInstance.updateInstant();
-            } else if (distance > 0.5) {
-                // Fast movement - use faster interpolation
+            } else if (distance > 1.0) {
+                // Fast movement
                 modelInstance.setInterpolationMode(SmoothTransformSystem.InterpolationMode.FAST);
-                modelInstance.setRootLocation(coreLoc);
                 modelInstance.update();
             } else {
-                // Normal movement - use smooth interpolation
+                // Normal movement
                 modelInstance.setInterpolationMode(SmoothTransformSystem.InterpolationMode.NORMAL);
-                modelInstance.setRootLocation(coreLoc);
                 modelInstance.update();
             }
 
@@ -184,11 +186,24 @@ public class CustomBoss {
         } else {
             ticksSinceLastMove++;
 
-            // Even when not moving, update occasionally for animations
+            // Still update occasionally for animations (every 5 ticks)
             if (ticksSinceLastMove % 5 == 0) {
                 modelInstance.update();
             }
         }
+    }
+
+    /**
+     * Check if core entity has moved significantly
+     */
+    private boolean hasCoreMoved(Location currentLoc) {
+        if (!currentLoc.getWorld().equals(lastLocation.getWorld())) {
+            return true; // World change
+        }
+
+        // Check distance squared for efficiency
+        double distSq = currentLoc.distanceSquared(lastLocation);
+        return distSq > MOVEMENT_THRESHOLD;
     }
 
     /**
@@ -197,11 +212,9 @@ public class CustomBoss {
     private void updateTarget() {
         ticksSinceTargetCheck++;
 
-        // Check for new target every 20 ticks
         if (ticksSinceTargetCheck < 20) return;
         ticksSinceTargetCheck = 0;
 
-        // Find nearest player within range
         List<Entity> nearby = coreEntity.getNearbyEntities(32, 32, 32);
         Player nearest = null;
         double nearestDist = Double.MAX_VALUE;
@@ -221,7 +234,6 @@ public class CustomBoss {
         if (nearest != null) {
             currentTarget = nearest;
 
-            // Make zombie target this player
             if (coreEntity instanceof Mob mob) {
                 mob.setTarget(nearest);
             }
@@ -249,7 +261,6 @@ public class CustomBoss {
         if (coreEntity != null && coreEntity.isValid()) {
             coreEntity.damage(amount);
 
-            // Trigger hurt animation
             if (stateMachine != null) {
                 stateMachine.playOneShot(AnimationStateMachine.AnimationState.HURT, null);
             }

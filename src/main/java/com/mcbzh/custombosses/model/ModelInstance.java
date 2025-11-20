@@ -325,6 +325,8 @@ public class ModelInstance {
         }
 
         public void spawn(Location root) {
+
+
             if (!isChunkLoaded(root)) return;
 
             entity = (BlockDisplay) root.getWorld().spawnEntity(root, EntityType.BLOCK_DISPLAY);

@@ -1,0 +1,75 @@
+# CustomBosses Configuration
+
+# Performance Settings
+performance:
+  # How often bosses update (in ticks, 1 = every tick, 2 = every other tick)
+  update-interval: 1
+
+  # Max number of bosses that can exist at once
+  max-bosses: 50
+
+  # Unload bosses in unloaded chunks
+  unload-with-chunks: true
+
+  # Max view distance for boss models (in blocks)
+  model-view-range: 64
+
+# Editor Settings
+editor:
+  # Default grid snap size
+  grid-snap: 0.1
+
+  # Max undo history
+  max-undo: 10
+
+  # Show debug info by default
+  debug-mode: false
+
+  # Auto-save interval (in ticks, -1 to disable)
+  auto-save-interval: 600
+
+# Animation Settings
+animations:
+  # Default interpolation mode (INSTANT, FAST, NORMAL, SMOOTH, VERY_SMOOTH)
+  default-interpolation: NORMAL
+
+  # Allow custom animations from players
+  allow-custom: true
+
+# Ability Settings
+abilities:
+  # Global cooldown multiplier (1.0 = normal, 2.0 = double cooldown)
+  cooldown-multiplier: 1.0
+
+  # Allow bosses to damage creative players (for testing)
+  damage-creative: false
+
+  # Allow bosses to damage ops (for testing)
+  damage-ops: false
+
+# Boss Spawning
+spawning:
+  # Remove bosses on server shutdown
+  remove-on-shutdown: true
+
+  # Save boss data on shutdown (for persistence)
+  save-on-shutdown: false
+
+  # Default boss health
+  default-health: 100.0
+
+  # Default hitbox size
+  default-hitbox:
+    width: 1.0
+    height: 2.0
+
+# Debug Options
+debug:
+  # Log boss ticks (very spammy!)
+  log-ticks: false
+
+  # Log ability usage
+  log-abilities: true
+
+  # Show performance warnings
+  performance-warnings: true

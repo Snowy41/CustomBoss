@@ -54,7 +54,7 @@ public class BossCommand implements CommandExecutor, TabCompleter {
 
                 CustomBoss boss = plugin.getBossManager().spawnBoss(model, player.getLocation());
 
-                // PHASE 1: Register abilities if specified
+                // FIXED: Register abilities BEFORE starting ability loop
                 if (args.length > 2) {
                     for (int i = 2; i < args.length; i++) {
                         registerAbility(boss, args[i]);
@@ -65,6 +65,9 @@ public class BossCommand implements CommandExecutor, TabCompleter {
                     registerDefaultAbilities(boss);
                     player.sendMessage("§aSpawned boss with default abilities");
                 }
+
+                // CRITICAL: Start ability system AFTER registration
+                boss.startAbilities();
 
                 player.sendMessage("§aSpawned boss: " + args[1] + " at " + boss.getUUID());
             }
